@@ -43,7 +43,7 @@ class Fbdown:
 
 		return self
 
-	def search(self, tag):
+	def search(self, tag, month=None, year=None):
 
 		search_field = WebDriverWait(self.driver, self.WAIT_SECS) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//input[@placeholder="Search"]'))) \
@@ -66,7 +66,10 @@ class Fbdown:
 
 		try:
 
-			e_ = self.driver.find_element_by_xpath('//div[text()="Public photos"]')
+			e_ = WebDriverWait(self.driver, self.WAIT_SECS) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
+
+			# self.driver.find_element_by_xpath('//div[text()="Public photos"]')
 
 			print('got it!')
 			print(e_.text)
@@ -75,12 +78,46 @@ class Fbdown:
 
 			print('no, still nothing')
 
+		# filter search results
+		date_posted = WebDriverWait(self.driver, self.WAIT_SECS) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//h4[text()="DATE POSTED"]')))
+
+		print('found date posted!')
+
+		as_ = date_posted.find_elements_by_xpath('../a[@role="radio"]')
+
+		if year and (not month):
+			# find and click the right year option
+			try:
+				[a for a in as_ if year == a.text.strip()].pop().click()
+			except:
+				print(f'photos for {year} are unavailable!')
+
+		elif year and month:
+
+			# there's also an option to choose a custom month + year
+			choosadate = date_posted.find_elements_by_xpath('../div[@role="radio"]')
+
+
+		e_ = WebDriverWait(self.driver, self.WAIT_SECS) \
+						.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
+	
+
+		see_all = WebDriverWait(self.driver, self.WAIT_SECS) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//a[text()="See all"]')))
+
+		print('found see all!')
+
+		return self
+
+
+
 
 
 
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam')
+	fbd = Fbdown().login().search('timtamslam', year='2018')
 
 
