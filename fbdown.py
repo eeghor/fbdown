@@ -37,11 +37,71 @@ class Fbdown:
 		self.driver.find_element_by_name("email").send_keys(self.login_creds['user'])
 		self.driver.find_element_by_name("pass").send_keys(self.login_creds['password'])
 
-		login_button = WebDriverWait(self.driver, self.WAIT_SECS) \
+		try:
+
+			WebDriverWait(self.driver, self.WAIT_SECS) \
 							.until(EC.element_to_be_clickable((By.ID, 'loginbutton'))).click()
+		except:
+
+			try:
+				WebDriverWait(self.driver, self.WAIT_SECS) \
+							.until(EC.element_to_be_clickable((By.XPATH, '[//button[@type="submit"]]'))).click()
+			except:
+				print('could not log in!')
+
 		time.sleep(2)
 
 		return self
+
+	def _choose_date(self, month=None, year=None):
+		"""
+		pick photos posted during a specific month of year
+		"""
+		m_selected = y_selected = False
+
+		while not (m_selected and y_selected):
+
+			date_posted = WebDriverWait(self.driver, self.WAIT_SECS) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//h4[text()="DATE POSTED"]')))
+
+			# there's also an option to choose a custom month + year
+			try:
+				date_posted.find_element_by_xpath('../div[@role="radio"]').click()
+			except:
+				pass
+
+			m_selector, y_selector = self.driver.find_elements_by_xpath('//h4[text()="DATE POSTED"]/../descendant::a[@rel="toggle"]')
+
+			if not m_selected:
+
+				m_selector.click()
+
+				WebDriverWait(self.driver, self.WAIT_SECS) \
+						.until(EC.visibility_of_element_located((By.XPATH, f'//ul[@role="menu"]/li/a/span/span[text()=\"{month.title()}\"]'))).click()
+
+				m_selected = True
+
+			elif not y_selected:
+
+				y_selector.click()
+
+				WebDriverWait(self.driver, self.WAIT_SECS) \
+						.until(EC.visibility_of_element_located((By.XPATH, f'//ul[@role="menu"]/li/a/span/span[text()=\"{year}\"]'))).click()
+
+				y_selected = True
+
+
+			else:
+
+				print('some problem with the month/year selectors!')	
+
+			WebDriverWait(self.driver, self.WAIT_SECS) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
+
+		print(f'selected date: {month.title()}, {year}')
+
+		return self		
+			
 
 	def search(self, tag, month=None, year=None):
 
@@ -78,16 +138,16 @@ class Fbdown:
 
 			print('no, still nothing')
 
-		# filter search results
-		date_posted = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.visibility_of_element_located((By.XPATH, '//h4[text()="DATE POSTED"]')))
-
-		print('found date posted!')
-
-		as_ = date_posted.find_elements_by_xpath('../a[@role="radio"]')
+		
 
 		if year and (not month):
 			# find and click the right year option
+
+			date_posted = WebDriverWait(self.driver, self.WAIT_SECS) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//h4[text()="DATE POSTED"]')))
+
+			as_ = date_posted.find_elements_by_xpath('../a[@role="radio"]')
+
 			try:
 				[a for a in as_ if year == a.text.strip()].pop().click()
 			except:
@@ -95,18 +155,45 @@ class Fbdown:
 
 		elif year and month:
 
-			# there's also an option to choose a custom month + year
-			choosadate = date_posted.find_elements_by_xpath('../div[@role="radio"]')
-
-
-		e_ = WebDriverWait(self.driver, self.WAIT_SECS) \
-						.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
+			self._choose_date(month=month, year=year)
 	
 
 		see_all = WebDriverWait(self.driver, self.WAIT_SECS) \
 					.until(EC.visibility_of_element_located((By.XPATH, '//a[text()="See all"]')))
 
 		print('found see all!')
+
+		see_all.click()
+
+		time.sleep(5)
+
+		# top results first (it's normally 4 pictures)
+		res = WebDriverWait(self.driver, self.WAIT_SECS) \
+					.until(EC.visibility_of_element_located((By.ID, 'BrowseResultsContainer')))
+
+		print('found container!')
+
+		all_links = res.find_element_by_id('BrowseResultsContainer').find_elements_by_xpath('/descendant::a[@href]')
+
+		print('found links: ', len(all_links))
+
+		for n, _ in enumerate(all_links, 1):
+
+			if not '?q=' in _.get_attribute('href'):
+				continue
+
+			print(f'link {n}...')
+			print(_.get_attribute('href'))
+
+			try:
+				im = _.find_element_by_css_selector('img.scaledImageFitHeight')
+				print('got image!', im)
+			except:
+				print('no image')
+				
+			time.sleep(1)
+
+
 
 		return self
 
@@ -118,6 +205,6 @@ class Fbdown:
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', year='2018')
+	fbd = Fbdown().login().search('timtamslam', month='march', year='2008')
 
 
