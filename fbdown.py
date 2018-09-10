@@ -28,6 +28,8 @@ class Fbdown:
 
 		self.login_creds = json.load(open('credentials/facebook.json'))
 
+		self.posts = []
+
 	def login(self):
 
 		print('logging in...')
@@ -173,27 +175,58 @@ class Fbdown:
 
 		print('found container!')
 
-		all_links = res.find_element_by_id('BrowseResultsContainer').find_elements_by_xpath('/descendant::a[@href]')
+		# imgs = res.find_element_by_id('BrowseResultsContainer').find_elements_by_xpath('/descendant::a[@href]')
 
-		print('found links: ', len(all_links))
+		imgs = self.driver.find_elements_by_xpath('//div[@id="BrowseResultsContainer"]/div/div/div/a[@href]')
+		print('found links: ', len(imgs))
 
-		for n, _ in enumerate(all_links, 1):
+		for i in imgs:
 
-			if not '?q=' in _.get_attribute('href'):
-				continue
+			im = i.find_element_by_xpath('descendant::img')
+			lks = i.find_element_by_xpath('following-sibling::div[@id]/span/a[@aria-label]').get_attribute('aria-label')
+			print(lks)
+			
+			self.posts.append({'post_url': i.get_attribute('href'), 
+									'picture_url': im.get_attribute('src')})
 
-			print(f'link {n}...')
-			print(_.get_attribute('href'))
+		imgs2 = self.driver.find_elements_by_xpath('//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]')
+		print('found links: ', len(imgs2))
 
-			try:
-				im = _.find_element_by_css_selector('img.scaledImageFitHeight')
-				print('got image!', im)
-			except:
-				print('no image')
-				
-			time.sleep(1)
+		for i in imgs2:
+			im = i.find_element_by_xpath('descendant::img')
+			self.posts.append({'post_url': i.get_attribute('href'), 
+									'picture_url': im.get_attribute('src')})
 
+		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 
+		while len(self.posts) < 15:
+
+			for c in range(3):
+
+				print('c=',c)
+
+				self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+				time.sleep(5)
+
+				imgs3 = self.driver.find_elements_by_xpath(f'//div[@id="fbBrowseScrollingPagerContainer{c}"]/div/div/div/div/a[@href]')
+				print('found links: ', len(imgs3))
+
+				for i in imgs3:
+					im = i.find_element_by_xpath('descendant::img')
+					self.posts.append({'post_url': i.get_attribute('href'), 
+										'picture_url': im.get_attribute('src')})
+
+				print(f'collected urls so far: {len(self.posts)}')
+
+				new_height = self.driver.execute_script("return document.body.scrollHeight")
+
+				if new_height > hight_:
+					hight_ = new_height
+				else:
+					print('reached the bottom of the page')
+					break
+
+		json.dump(self.posts, open('posts.json','w'))
 
 		return self
 
