@@ -8,6 +8,9 @@ from selenium.webdriver.common.action_chains import ActionChains
 import time
 import json
 import re
+import os
+
+import urllib.request
 
 import arrow
 
@@ -35,6 +38,16 @@ class Fbdown:
 		self.reactions = 'like love haha wow sad angry'.split()
 
 		self.posts = defaultdict(lambda: defaultdict())
+
+		self.video_dir = 'videos'
+
+		if not os.path.exists(self.video_dir):
+			os.mkdir(self.video_dir)
+
+		self.picture_dir = 'pictures'
+
+		if not os.path.exists(self.picture_dir):
+			os.mkdir(self.picture_dir)
 
 	def login(self):
 
@@ -118,6 +131,17 @@ class Fbdown:
 
 		return {post_id: {'post_url': post_url, 'content_url': content_url}}
 
+	def _get_video_post_info(self, dv):
+
+		a = dv.find_element_by_xpath('descendant::a[@aria-label]')
+
+		if 'Video' in a.get_attribute('aria-label'):
+
+			post_url = a.get_attribute('href')
+			post_id = re.search(r'(?<=videos\/)\d+(?=\/)', post_url).group(0)
+
+		return {post_id: {'post_url': post_url}}
+
 
 	def scroll_and_collect(self, max_items=10):
 
@@ -126,22 +150,6 @@ class Fbdown:
 			for _ in self.driver.find_elements_by_xpath(block_xpath):
 
 				self.posts.update(self._get_post_info(_))
-
-				# im = _.find_element_by_xpath('descendant::img')
-
-				# post_url = _.get_attribute('href')
-				# post_id = self.fbid_re.search(post_url).group(0)
-				# content_url = im.get_attribute('src')
-
-				# self.posts.append({'post_url': _.get_attribute('href'), 
-				# 					'content_url': im.get_attribute('src')})
-
-		# for _ in self.driver.find_elements_by_xpath('//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]'):
-
-		# 	im = _.find_element_by_xpath('descendant::img')
-
-		# 	self.posts.append({'post_url': _.get_attribute('href'), 
-		# 							'content_url': im.get_attribute('src')})
 
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 
@@ -155,10 +163,6 @@ class Fbdown:
 			for _ in self.driver.find_elements_by_xpath(f'//div[@id="fbBrowseScrollingPagerContainer{c}"]/div/div/div/div/a[@href]'):
 
 				self.posts.update(self._get_post_info(_))
-
-				# im = _.find_element_by_xpath('descendant::img')
-				# self.posts.append({'post_url': _.get_attribute('href'), 
-				# 					'content_url': im.get_attribute('src')})
 
 			print(f'collected urls so far: {len(self.posts)}')
 
@@ -174,6 +178,41 @@ class Fbdown:
 
 		return self
 
+	def scroll_and_collect_video(self, max_items=47):
+
+		hight_ = self.driver.execute_script("return document.body.scrollHeight")
+		print('starting height is ', hight_)
+
+		print('scrolling...')
+
+		while 1:
+
+			self.driver.execute_script(f"window.scrollTo(0, {hight_ + 200});")
+			
+			time.sleep(3)
+
+			new_height = self.driver.execute_script("return document.body.scrollHeight")
+			
+			print('now height is ', new_height)
+
+			if new_height != hight_:
+				hight_ = new_height
+			else:
+				print('reached the bottom of the page')
+				break
+
+		while len(self.posts) <= max_items:
+
+			all_divs = self.driver.find_elements_by_xpath('//div[@role="VIDEOS"]')
+
+			print('have divs: ', len(all_divs))
+
+			for i, _ in enumerate(all_divs, 1):
+				self.posts.update(self._get_video_post_info(_))
+				
+		return self
+
+
 	def get_post(self, post_url):
 
 		self.driver.get(post_url)
@@ -187,7 +226,13 @@ class Fbdown:
 									'D MMMM YYYY').to('Australia/Sydney').format('YYYY-MM-DD')})
 
 		except:
-			pass
+
+			try:
+				d.update({'when_posted': arrow.get(WebDriverWait(self.driver, self.WAIT_SECS) \
+								.until(EC.visibility_of_element_located((By.CLASS_NAME, 'timestamp')).get_attribute('data-utime'))).format('YYYY-MM-DD')})
+
+			except:
+				pass
 
 		for m in ['comments', 'shares']:
 
@@ -214,9 +259,19 @@ class Fbdown:
 				if m_line:
 					d.update({m+ 's': int(m_line.group(0))})
 
+		# get the content url - for videos only
+		try:
+			vid = self.driver.find_element_by_xpath('//video[@src]')
+			ActionChains(self.driver).move_to_element(vid).context_click().perform()
+
+			print(self.driver.find_element_by_xpath('//span[@value]').get_attribute('value'))
+			
+		except:
+			pass
+
 		return d
 
-	def search(self, tag, month=None, year=None):
+	def search(self, tag, type='photos', month=None, year=None):
 
 		search_field = WebDriverWait(self.driver, self.WAIT_SECS) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//input[@placeholder="Search"]'))) \
@@ -231,25 +286,18 @@ class Fbdown:
 		time.sleep(2)
 
 		tb_ = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.element_to_be_clickable((By.XPATH, '//li[@data-edge="keywords_blended_photos"]/a[@href]'))).click()
+					.until(EC.element_to_be_clickable((By.XPATH, f'//li[@data-edge="keywords_blended_{type}"]/a[@href]'))).click()
 		
 		time.sleep(2)
 
-		print('do we see Public Photos?')
+		if type == 'photos':
 
-		try:
-
-			e_ = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
-
-			# self.driver.find_element_by_xpath('//div[text()="Public photos"]')
-
-			print('got it!')
-			print(e_.text)
-
-		except:
-
-			print('no, still nothing')
+			try:
+	
+				e_ = WebDriverWait(self.driver, self.WAIT_SECS) \
+						.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
+			except:
+				pass
 
 		
 
@@ -264,34 +312,68 @@ class Fbdown:
 			try:
 				[a for a in as_ if year == a.text.strip()].pop().click()
 			except:
-				print(f'photos for {year} are unavailable!')
+				print(f'{type} for {year} are unavailable!')
 
-		elif year and month:
+		elif year and month and (type == 'photos'):
 
 			self._choose_date(month=month, year=year)
-	
 
-		see_all = WebDriverWait(self.driver, self.WAIT_SECS) \
+		else:
+			print(f'date selected incorrectly for {type}')
+			return None
+	
+		if (type == 'photos'):
+			see_all = WebDriverWait(self.driver, self.WAIT_SECS) \
 					.until(EC.visibility_of_element_located((By.XPATH, '//a[text()="See all"]')))
 
-		print('found see all!')
+			print('found see all!')
 
-		see_all.click()
+			see_all.click()
 
-		time.sleep(5)
+			time.sleep(5)
 
-		self.scroll_and_collect()
+			self.scroll_and_collect()
 
-		for p in self.posts:
-			self.posts[p].update(self.get_post(self.posts[p]['post_url']))
+			for p in self.posts:
+				self.posts[p].update(self.get_post(self.posts[p]['post_url']))
+
+		elif (type == 'videos'):
+
+			self.scroll_and_collect_video()
+
+			for i, p in enumerate(self.posts, 1):
+				if i%3 == 0:
+					break
+				self.posts[p].update(self.get_post(self.posts[p]['post_url']))
 		
 		json.dump(self.posts, open('posts.json','w'))
 
 		return self
 
+	def get_content(self, id, url):
+
+		"""
+		download whatever the url points to; an example of a url we have:
+		https://scontent-syd2-1.xx.fbcdn.net/v/t1.0-0/p526x296/12241297_994655900599825_5991089523523548804_n.jpg?
+		"""
+		ext_ = re.search(r'(?<=\.)[a-z]+(?=\?)',url).group(0)
+
+		if ext_ == 'mp4':
+			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.video_dir, f'video_{id}.{ext_}'))
+		else:
+			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.picture_dir, f'picture_{id}.{ext_}'))
+
+		return self
+
+
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', month='march', year='2008')
+	fbd = Fbdown().login().search('timtamslam', type='videos', year='2018')
+
+	# for i, k in enumerate(fbd.posts, 1):
+	# 	if i == 10:
+	# 		break
+	# 	fbd.get_content(k, fbd.posts[k]['content_url'])
 
 
