@@ -9,13 +9,15 @@ import time
 import json
 import re
 
+import arrow
+
 from collections import defaultdict
 
 class Fbdown:
 
 	def __init__(self):
 
-		self.WAIT_SECS = 20
+		self.WAIT_SECS = 30
 
 		options = webdriver.ChromeOptions()
 		options.add_argument('disable-notifications')
@@ -26,9 +28,13 @@ class Fbdown:
 
 		self.login_url ='https://www.facebook.com'
 
+		self.fbid_re = re.compile(r'(?<=p.)\d+')
+
 		self.login_creds = json.load(open('credentials/facebook.json'))
 
-		self.posts = []
+		self.reactions = 'like love haha wow sad angry'.split()
+
+		self.posts = defaultdict(lambda: defaultdict())
 
 	def login(self):
 
@@ -102,8 +108,113 @@ class Fbdown:
 
 		print(f'selected date: {month.title()}, {year}')
 
-		return self		
+		return self	
+
+	def _get_post_info(self, a):
+
+		post_url = a.get_attribute('href')
+		post_id = self.fbid_re.search(post_url).group(0)
+		content_url = a.find_element_by_xpath('descendant::img').get_attribute('src')
+
+		return {post_id: {'post_url': post_url, 'content_url': content_url}}
+
+
+	def scroll_and_collect(self, max_items=10):
+
+		for block_xpath in ['//div[@id="BrowseResultsContainer"]/div/div/div/a[@href]',
+								'//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]']:
+			for _ in self.driver.find_elements_by_xpath(block_xpath):
+
+				self.posts.update(self._get_post_info(_))
+
+				# im = _.find_element_by_xpath('descendant::img')
+
+				# post_url = _.get_attribute('href')
+				# post_id = self.fbid_re.search(post_url).group(0)
+				# content_url = im.get_attribute('src')
+
+				# self.posts.append({'post_url': _.get_attribute('href'), 
+				# 					'content_url': im.get_attribute('src')})
+
+		# for _ in self.driver.find_elements_by_xpath('//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]'):
+
+		# 	im = _.find_element_by_xpath('descendant::img')
+
+		# 	self.posts.append({'post_url': _.get_attribute('href'), 
+		# 							'content_url': im.get_attribute('src')})
+
+		hight_ = self.driver.execute_script("return document.body.scrollHeight")
+
+		c = 0
+
+		while len(self.posts) <= max_items:
+
+			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+			time.sleep(5)
+
+			for _ in self.driver.find_elements_by_xpath(f'//div[@id="fbBrowseScrollingPagerContainer{c}"]/div/div/div/div/a[@href]'):
+
+				self.posts.update(self._get_post_info(_))
+
+				# im = _.find_element_by_xpath('descendant::img')
+				# self.posts.append({'post_url': _.get_attribute('href'), 
+				# 					'content_url': im.get_attribute('src')})
+
+			print(f'collected urls so far: {len(self.posts)}')
+
+			new_height = self.driver.execute_script("return document.body.scrollHeight")
+
+			if new_height > hight_:
+				hight_ = new_height
+			else:
+				print('reached the bottom of the page')
+				break
+
+			c += 1
+
+		return self
+
+	def get_post(self, post_url):
+
+		self.driver.get(post_url)
+
+		d = dict()
+
+		try:
+
+			d.update({'when_posted': arrow.get(WebDriverWait(self.driver, self.WAIT_SECS) \
+								.until(EC.visibility_of_element_located((By.CLASS_NAME, 'timestampContent'))).text.strip(), 
+									'D MMMM YYYY').to('Australia/Sydney').format('YYYY-MM-DD')})
+
+		except:
+			pass
+
+		for m in ['comments', 'shares']:
+
+			for _ in self.driver.find_elements_by_xpath('//a[@role="button"]'):
+
+				tx_ = _.text.lower()
+
+				if not tx_:
+					continue
+
+				m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
+
+				if m_line:
+					d.update({m: int(m_line.group(0))})
+
+		for _ in self.driver.find_elements_by_xpath('//a[@role="button" and @aria-label]'):
 			
+			tx_ = _.get_attribute('aria-label').lower().strip()
+
+			for m in self.reactions:
+
+				m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
+
+				if m_line:
+					d.update({m+ 's': int(m_line.group(0))})
+
+		return d
 
 	def search(self, tag, month=None, year=None):
 
@@ -169,71 +280,14 @@ class Fbdown:
 
 		time.sleep(5)
 
-		# top results first (it's normally 4 pictures)
-		res = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.visibility_of_element_located((By.ID, 'BrowseResultsContainer')))
+		self.scroll_and_collect()
 
-		print('found container!')
-
-		# imgs = res.find_element_by_id('BrowseResultsContainer').find_elements_by_xpath('/descendant::a[@href]')
-
-		imgs = self.driver.find_elements_by_xpath('//div[@id="BrowseResultsContainer"]/div/div/div/a[@href]')
-		print('found links: ', len(imgs))
-
-		for i in imgs:
-
-			im = i.find_element_by_xpath('descendant::img')
-			lks = i.find_element_by_xpath('following-sibling::div[@id]/span/a[@aria-label]').get_attribute('aria-label')
-			print(lks)
-			
-			self.posts.append({'post_url': i.get_attribute('href'), 
-									'picture_url': im.get_attribute('src')})
-
-		imgs2 = self.driver.find_elements_by_xpath('//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]')
-		print('found links: ', len(imgs2))
-
-		for i in imgs2:
-			im = i.find_element_by_xpath('descendant::img')
-			self.posts.append({'post_url': i.get_attribute('href'), 
-									'picture_url': im.get_attribute('src')})
-
-		hight_ = self.driver.execute_script("return document.body.scrollHeight")
-
-		while len(self.posts) < 15:
-
-			for c in range(3):
-
-				print('c=',c)
-
-				self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
-				time.sleep(5)
-
-				imgs3 = self.driver.find_elements_by_xpath(f'//div[@id="fbBrowseScrollingPagerContainer{c}"]/div/div/div/div/a[@href]')
-				print('found links: ', len(imgs3))
-
-				for i in imgs3:
-					im = i.find_element_by_xpath('descendant::img')
-					self.posts.append({'post_url': i.get_attribute('href'), 
-										'picture_url': im.get_attribute('src')})
-
-				print(f'collected urls so far: {len(self.posts)}')
-
-				new_height = self.driver.execute_script("return document.body.scrollHeight")
-
-				if new_height > hight_:
-					hight_ = new_height
-				else:
-					print('reached the bottom of the page')
-					break
-
+		for p in self.posts:
+			self.posts[p].update(self.get_post(self.posts[p]['post_url']))
+		
 		json.dump(self.posts, open('posts.json','w'))
 
 		return self
-
-
-
-
-
 
 
 if __name__ == '__main__':
