@@ -27,8 +27,6 @@ class Fbdown:
 
 		self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
 
-		# self.driver = webdriver.Chrome('webdriver/chromedriver')
-
 		self.login_url ='https://www.facebook.com'
 
 		self.fbid_re = re.compile(r'(?<=p.)\d+')
@@ -129,7 +127,7 @@ class Fbdown:
 		post_id = self.fbid_re.search(post_url).group(0)
 		content_url = a.find_element_by_xpath('descendant::img').get_attribute('src')
 
-		return {post_id: {'post_url': post_url, 'content_url': content_url}}
+		return {post_id: {'post_url': post_url, 'content_url': content_url, 'type': 'picture'}}
 
 	def _get_video_post_info(self, dv):
 
@@ -140,7 +138,7 @@ class Fbdown:
 			post_url = a.get_attribute('href')
 			post_id = re.search(r'(?<=videos\/)\d+(?=\/)', post_url).group(0)
 
-		return {post_id: {'post_url': post_url}}
+		return {post_id: {'post_url': post_url, 'type': 'video/mp4'}}
 
 
 	def scroll_and_collect(self, max_items=10):
@@ -257,19 +255,44 @@ class Fbdown:
 				m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
 
 				if m_line:
-					d.update({m+ 's': int(m_line.group(0))})
+					d.update({m + 's': int(m_line.group(0))})
 
 		# get the content url - for videos only
 		try:
-			vid = self.driver.find_element_by_xpath('//video[@src]')
-			ActionChains(self.driver).move_to_element(vid).context_click().perform()
 
-			print(self.driver.find_element_by_xpath('//span[@value]').get_attribute('value'))
+			ActionChains(self.driver) \
+					.move_to_element(self.driver.find_element_by_xpath('//video[@src]')) \
+					.context_click() \
+					.perform()
+
+			d.update({'content_url': self.driver.find_element_by_xpath('//span[@value]').get_attribute('value')})
 			
 		except:
 			pass
 
 		return d
+
+	def get_mob_post(self, post_url):
+		"""
+		get direct video url 
+		https://www.facebook.com/abccoffscoast/videos/2117273828315294/
+		https://m.facebook.com
+		"""
+		new_url = post_url.replace('https://www', 'https://m')
+
+		print('getting ', new_url)
+
+		self.driver.get(new_url)
+
+		_ = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
+
+		# this data-store looks like a dictionary but it's a string
+		ds_ = json.loads(_.get_attribute('data-store'))
+
+		url = ds_['src']
+
+		return {'content_url': url}
+
 
 	def search(self, tag, type='photos', month=None, year=None):
 
@@ -342,9 +365,10 @@ class Fbdown:
 			self.scroll_and_collect_video()
 
 			for i, p in enumerate(self.posts, 1):
-				if i%3 == 0:
+				if i%10 == 0:
 					break
 				self.posts[p].update(self.get_post(self.posts[p]['post_url']))
+				self.posts[p].update(self.get_mob_post(self.posts[p]['post_url']))
 		
 		json.dump(self.posts, open('posts.json','w'))
 
@@ -355,12 +379,23 @@ class Fbdown:
 		"""
 		download whatever the url points to; an example of a url we have:
 		https://scontent-syd2-1.xx.fbcdn.net/v/t1.0-0/p526x296/12241297_994655900599825_5991089523523548804_n.jpg?
+
+		https://video-syd2-1.xx.fbcdn.net/v/t42.1790-2/14099960_1136403553069791_825217156_n.mp4?_nc_cat=0&efg=eyJ2ZW5jb2RlX3RhZyI6InN2ZV9zZCJ9&oh=1d153c7c15f6de225227293d3d7926e2&oe=5B986C37
 		"""
-		ext_ = re.search(r'(?<=\.)[a-z]+(?=\?)',url).group(0)
+		print('downloading ', url)
+
+		if not url:
+			return None
+
+		try:
+			ext_ = re.search(r'(?<=\.)[a-z4]+(?=\?)',url).group(0)
+		except:
+			print('couldn\'t find extension!')
+			return None
 
 		if ext_ == 'mp4':
 			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.video_dir, f'video_{id}.{ext_}'))
-		else:
+		elif ext_ in ['jpg', 'png']:
 			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.picture_dir, f'picture_{id}.{ext_}'))
 
 		return self
@@ -371,9 +406,9 @@ if __name__ == '__main__':
 
 	fbd = Fbdown().login().search('timtamslam', type='videos', year='2018')
 
-	# for i, k in enumerate(fbd.posts, 1):
-	# 	if i == 10:
-	# 		break
-	# 	fbd.get_content(k, fbd.posts[k]['content_url'])
+	for i, k in enumerate(fbd.posts, 1):
+		if i == 10:
+			break
+		fbd.get_content(k, fbd.posts[k].get('content_url', None))
 
 
