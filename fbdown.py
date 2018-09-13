@@ -18,43 +18,50 @@ from collections import defaultdict
 
 class Fbdown:
 
-	def __init__(self):
+	def __init__(self, wait=30, post_dir='posts', video_dir='videos', picture_dir='pictures',
+						creds_dir='credentials'):
 
-		self.WAIT_SECS = 30
+		self.WAIT_SECS = wait
+		self.today = arrow.utcnow().to('Australia/Sydney').format('YYYY-MM-DD')
 
 		options = webdriver.ChromeOptions()
 		options.add_argument('disable-notifications')
 
 		self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
 
-		self.login_url ='https://www.facebook.com'
-
-		self.fbid_re = re.compile(r'(?<=p.)\d+')
-
-		self.login_creds = json.load(open('credentials/facebook.json'))
+		self.fbid_re = re.compile(r'(?<=p.)\d+')	
 
 		self.reactions = 'like love haha wow sad angry'.split()
+		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png']}
 
-		self.posts = defaultdict(lambda: defaultdict())
+		self.video_dir = video_dir
+		self.picture_dir = picture_dir
+		self.post_dir = post_dir
+		self.creds_dir = creds_dir
 
-		self.video_dir = 'videos'
+		if not os.path.exists(self.creds_dir):
+			self.driver.close()
+			raise Exception('can\'t find the credentials directory!')
 
-		if not os.path.exists(self.video_dir):
-			os.mkdir(self.video_dir)
-
-		self.picture_dir = 'pictures'
-
-		if not os.path.exists(self.picture_dir):
-			os.mkdir(self.picture_dir)
+		for d in [self.post_dir, self.video_dir, self.picture_dir]:
+			if not os.path.exists(d):
+				os.mkdir(d)
+		try:
+			self.posts = json.load(open(os.path.join(self.post_dir, 'posts.json')))
+			print(f'found a post collection with {len(self.posts)} posts...')
+		except:
+			self.posts = defaultdict(lambda: defaultdict())
+			print('starting a new post collection...')
 
 	def login(self):
+		"""
+		read credentials from a JSON file and log into your account
+		"""
+		LOGIN = json.load(open(f'{self.creds_dir}/facebook.json'))
 
-		print('logging in...')
-
-		self.driver.get(self.login_url)
-
-		self.driver.find_element_by_name("email").send_keys(self.login_creds['user'])
-		self.driver.find_element_by_name("pass").send_keys(self.login_creds['password'])
+		self.driver.get(LOGIN['url'])
+		self.driver.find_element_by_name('email').send_keys(LOGIN['user'])
+		self.driver.find_element_by_name('pass').send_keys(LOGIN['password'])
 
 		try:
 
@@ -124,21 +131,24 @@ class Fbdown:
 	def _get_post_info(self, a):
 
 		post_url = a.get_attribute('href')
-		post_id = self.fbid_re.search(post_url).group(0)
-		content_url = a.find_element_by_xpath('descendant::img').get_attribute('src')
 
-		return {post_id: {'post_url': post_url, 'content_url': content_url, 'type': 'picture'}}
+		post_id = None
 
-	def _get_video_post_info(self, dv):
+		# post id is a part of post url so we just extract it
+		try:
+			post_id = self.fbid_re.search(post_url).group(0)
+		except:
+			try:
+				aria_tx_ = a.get_attribute('aria-label')
+				if 'Video' in aria_tx_:
+					try:
+						post_id = re.search(r'(?<=videos\/)\d+(?=\/)', post_url).group(0)
+					except:
+						pass
+			except:
+				pass
 
-		a = dv.find_element_by_xpath('descendant::a[@aria-label]')
-
-		if 'Video' in a.get_attribute('aria-label'):
-
-			post_url = a.get_attribute('href')
-			post_id = re.search(r'(?<=videos\/)\d+(?=\/)', post_url).group(0)
-
-		return {post_id: {'post_url': post_url, 'type': 'video/mp4'}}
+		return {post_id: {'post_url': post_url}}
 
 
 	def scroll_and_collect(self, max_items=10):
@@ -147,7 +157,13 @@ class Fbdown:
 								'//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]']:
 			for _ in self.driver.find_elements_by_xpath(block_xpath):
 
-				self.posts.update(self._get_post_info(_))
+				new_post_ = self._get_post_info(_)  # {post_id: {}}
+
+				if set(new_post_) & set(self.posts):
+					# no need to update, we have this post info already
+					pass
+				else:
+					self.posts.update()
 
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 
@@ -160,7 +176,12 @@ class Fbdown:
 
 			for _ in self.driver.find_elements_by_xpath(f'//div[@id="fbBrowseScrollingPagerContainer{c}"]/div/div/div/div/a[@href]'):
 
-				self.posts.update(self._get_post_info(_))
+				new_post_ = self._get_post_info(_)
+
+				if set(new_post_) & set(self.posts):
+					pass
+				else:
+					self.posts.update(new_post_)
 
 			print(f'collected urls so far: {len(self.posts)}')
 
@@ -201,63 +222,79 @@ class Fbdown:
 
 		while len(self.posts) <= max_items:
 
-			all_divs = self.driver.find_elements_by_xpath('//div[@role="VIDEOS"]')
-
-			print('have divs: ', len(all_divs))
-
-			for i, _ in enumerate(all_divs, 1):
-				self.posts.update(self._get_video_post_info(_))
+			for i, _ in enumerate(self.driver.find_elements_by_xpath('//div[@role="VIDEOS"]'), 1):
+				print('i=', i)
+				self.posts.update(self._get_post_info(_.find_element_by_xpath('descendant::a[@aria-label]')))
+				# r = _.find_element_by_xpath('//abbr[@data-utime]')
+				# posted = arrow.get(r.get_attribute('data-utime')).format('YYYY-MM-DD')
+				# print(f'posted on {posted}')
+		print(f'collected {len(self.posts)} videos')
 				
 		return self
 
+	def _get_metrics(self):
 
-	def get_post(self, post_url):
+		"""
+		assuming you're ON THE POST PAGE, pick up reactions, comments and shares and return as a dictionary; 
+		the dictionary is supposed to look like 
+			{'metrics': {'2019-09-10': {'comments': 3, 'shares': 8, ...}}
+		"""
+
+		dict_ = defaultdict(lambda: defaultdict(lambda: defaultdict()))
+
+		for _ in self.driver.find_elements_by_xpath('//a[@role="button"]'):
+
+			# search for comments or shares, they may sit in text
+			tx_ = _.text.lower()
+
+			if tx_:
+				for m in ['comments', 'shares']:
+					m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
+					if m_line:
+						dict_['metrics'][self.today][m] = int(m_line.group(0))
+
+			try:
+				aria_tx_ = _.get_attribute('aria-label').lower().strip()
+				
+				for m in self.reactions:
+					m_line = re.search(r'\d+\s+(?=' + f'{m})', aria_tx_)
+					if m_line:
+						dict_['metrics'][self.today][m + 's'] = int(m_line.group(0))
+			except:
+				continue
+
+		return dict_
+
+	def get_post_details(self, post_url):
+
+		"""
+		given a url to the post page, go there and pick up some post details, such as all metrics and date posted;
+		return these as a dictionary
+		"""
 
 		self.driver.get(post_url)
 
-		d = dict()
+		d = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
 		try:
-
-			d.update({'when_posted': arrow.get(WebDriverWait(self.driver, self.WAIT_SECS) \
-								.until(EC.visibility_of_element_located((By.CLASS_NAME, 'timestampContent'))).text.strip(), 
-									'D MMMM YYYY').to('Australia/Sydney').format('YYYY-MM-DD')})
-
+			d['when_posted'] = arrow.get(WebDriverWait(self.driver, self.WAIT_SECS) \
+								.until(EC.visibility_of_element_located((By.XPATH, '//abbr[@title and @data-utime]'))) \
+									.get_attribute('data-utime')) \
+									.format('YYYY-MM-DD')
 		except:
+			# if a post has no timestamp, it's useless
+			print('WARNING: found a post without a timestamp!')
+			return d
 
-			try:
-				d.update({'when_posted': arrow.get(WebDriverWait(self.driver, self.WAIT_SECS) \
-								.until(EC.visibility_of_element_located((By.CLASS_NAME, 'timestamp')).get_attribute('data-utime'))).format('YYYY-MM-DD')})
+		d.update(self._get_metrics())
 
-			except:
-				pass
+		# find content url, first for pictures
+		try:
+			curl_ = self.driver.find_element_by_class_name('spotlight').get_attribute('src')
+		except:
+			pass
 
-		for m in ['comments', 'shares']:
-
-			for _ in self.driver.find_elements_by_xpath('//a[@role="button"]'):
-
-				tx_ = _.text.lower()
-
-				if not tx_:
-					continue
-
-				m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
-
-				if m_line:
-					d.update({m: int(m_line.group(0))})
-
-		for _ in self.driver.find_elements_by_xpath('//a[@role="button" and @aria-label]'):
-			
-			tx_ = _.get_attribute('aria-label').lower().strip()
-
-			for m in self.reactions:
-
-				m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
-
-				if m_line:
-					d.update({m + 's': int(m_line.group(0))})
-
-		# get the content url - for videos only
+		# now try for videos
 		try:
 
 			ActionChains(self.driver) \
@@ -265,10 +302,11 @@ class Fbdown:
 					.context_click() \
 					.perform()
 
-			d.update({'content_url': self.driver.find_element_by_xpath('//span[@value]').get_attribute('value')})
-			
+			curl_ = self.driver.find_element_by_xpath('//span[@value]').get_attribute('value')			
 		except:
 			pass
+
+		d['content_url'] = curl_
 
 		return d
 
@@ -278,13 +316,16 @@ class Fbdown:
 		https://www.facebook.com/abccoffscoast/videos/2117273828315294/
 		https://m.facebook.com
 		"""
-		new_url = post_url.replace('https://www', 'https://m')
 
-		print('getting ', new_url)
+		self.driver.get(post_url.replace('https://www', 'https://m'))
 
-		self.driver.get(new_url)
-
-		_ = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
+		try:
+			_ = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
+		except:
+			try:
+				_ = self.driver.find_element_by_xpath('//div[@data-sigil="photo-image"]')
+			except:
+				return {'content_url': None}
 
 		# this data-store looks like a dictionary but it's a string
 		ds_ = json.loads(_.get_attribute('data-store'))
@@ -349,8 +390,6 @@ class Fbdown:
 			see_all = WebDriverWait(self.driver, self.WAIT_SECS) \
 					.until(EC.visibility_of_element_located((By.XPATH, '//a[text()="See all"]')))
 
-			print('found see all!')
-
 			see_all.click()
 
 			time.sleep(5)
@@ -358,7 +397,7 @@ class Fbdown:
 			self.scroll_and_collect()
 
 			for p in self.posts:
-				self.posts[p].update(self.get_post(self.posts[p]['post_url']))
+				self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
 
 		elif (type == 'videos'):
 
@@ -367,10 +406,14 @@ class Fbdown:
 			for i, p in enumerate(self.posts, 1):
 				if i%10 == 0:
 					break
-				self.posts[p].update(self.get_post(self.posts[p]['post_url']))
+				self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
 				self.posts[p].update(self.get_mob_post(self.posts[p]['post_url']))
-		
-		json.dump(self.posts, open('posts.json','w'))
+
+		return self
+
+	def save(self):
+
+		json.dump(self.posts, open(f'{self.post_dir}/posts.json','w'))
 
 		return self
 
@@ -393,9 +436,9 @@ class Fbdown:
 			print('couldn\'t find extension!')
 			return None
 
-		if ext_ == 'mp4':
+		if ext_ in self.extensions['video']:
 			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.video_dir, f'video_{id}.{ext_}'))
-		elif ext_ in ['jpg', 'png']:
+		elif ext_ in self.extensions['picture']:
 			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.picture_dir, f'picture_{id}.{ext_}'))
 
 		return self
@@ -404,11 +447,13 @@ class Fbdown:
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', type='videos', year='2018')
+	fbd = Fbdown().login().search('timtamslam', type='videos', year='2017')
 
 	for i, k in enumerate(fbd.posts, 1):
 		if i == 10:
 			break
 		fbd.get_content(k, fbd.posts[k].get('content_url', None))
+
+	fbd.save()
 
 
