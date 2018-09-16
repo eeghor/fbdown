@@ -317,7 +317,7 @@ class Fbdown:
 		https://m.facebook.com
 		"""
 
-		self.driver.get(post_url.replace('https://www', 'https://m'))
+		self.driver.get(post_url.replace('www', 'm'))
 
 		try:
 			_ = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
