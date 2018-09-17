@@ -10,6 +10,8 @@ import json
 import re
 import os
 
+import itertools
+
 import urllib.request
 
 import arrow
@@ -21,7 +23,8 @@ class Fbdown:
 	def __init__(self, wait=30, post_dir='posts', video_dir='videos', picture_dir='pictures',
 						creds_dir='credentials'):
 
-		self.WAIT_SECS = wait
+		self.wait = wait
+
 		self.today = arrow.utcnow().to('Australia/Sydney').format('YYYY-MM-DD')
 
 		options = webdriver.ChromeOptions()
@@ -30,6 +33,7 @@ class Fbdown:
 		self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
 
 		self.fbid_re = re.compile(r'(?<=p.)\d+')	
+		self.vidid_re = re.compile(r'(?<=videos\/)\d+(?=\/)')
 
 		self.reactions = 'like love haha wow sad angry'.split()
 		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png']}
@@ -57,76 +61,50 @@ class Fbdown:
 		"""
 		read credentials from a JSON file and log into your account
 		"""
-		LOGIN = json.load(open(f'{self.creds_dir}/facebook.json'))
+
+		try:
+			LOGIN = json.load(open(f'{self.creds_dir}/facebook.json'))
+		except:
+			raise IOError('can\'t find the credentials file!')
+		else:
+			if not all([_ in LOGIN for _ in 'url user password'.split()]):
+				raise ValueError('missing keys in the credentials file!')
 
 		self.driver.get(LOGIN['url'])
 		self.driver.find_element_by_name('email').send_keys(LOGIN['user'])
 		self.driver.find_element_by_name('pass').send_keys(LOGIN['password'])
 
+		# find the right button to click, depending on what variation of the login page you're on
+
+		btn_ = None
+
 		try:
-
-			WebDriverWait(self.driver, self.WAIT_SECS) \
-							.until(EC.element_to_be_clickable((By.ID, 'loginbutton'))).click()
+			btn_ = WebDriverWait(self.driver, self.wait) \
+							.until(EC.element_to_be_clickable((By.ID, 'loginbutton'))) 
 		except:
+			pass
 
+		if not btn_:
 			try:
-				WebDriverWait(self.driver, self.WAIT_SECS) \
-							.until(EC.element_to_be_clickable((By.XPATH, '[//button[@type="submit"]]'))).click()
-			except:
-				print('could not log in!')
-
-		time.sleep(2)
-
-		return self
-
-	def _choose_date(self, month=None, year=None):
-		"""
-		pick photos posted during a specific month of year
-		"""
-		m_selected = y_selected = False
-
-		while not (m_selected and y_selected):
-
-			date_posted = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.visibility_of_element_located((By.XPATH, '//h4[text()="DATE POSTED"]')))
-
-			# there's also an option to choose a custom month + year
-			try:
-				date_posted.find_element_by_xpath('../div[@role="radio"]').click()
+				btn_ = WebDriverWait(self.driver, self.wait) \
+							.until(EC.element_to_be_clickable((By.XPATH, '[//button[@type="submit"]]')))
 			except:
 				pass
 
-			m_selector, y_selector = self.driver.find_elements_by_xpath('//h4[text()="DATE POSTED"]/../descendant::a[@rel="toggle"]')
+		if not btn_:
+			raise Exception('can\'t find the login button!')
+		else:
+			btn_.click()
 
-			if not m_selected:
+			# wait until the Fundraisers option (presumably, the last on the list of options) on the left panel 
+			# becomes clickable
 
-				m_selector.click()
+			try:
+				WebDriverWait(self.driver, self.wait).until(EC.element_to_be_clickable((By.XPATH, '//a[@title="Fundraisers"]')))
+			except:
+				raise Exception('page after login has been loading too slow...')
 
-				WebDriverWait(self.driver, self.WAIT_SECS) \
-						.until(EC.visibility_of_element_located((By.XPATH, f'//ul[@role="menu"]/li/a/span/span[text()=\"{month.title()}\"]'))).click()
-
-				m_selected = True
-
-			elif not y_selected:
-
-				y_selector.click()
-
-				WebDriverWait(self.driver, self.WAIT_SECS) \
-						.until(EC.visibility_of_element_located((By.XPATH, f'//ul[@role="menu"]/li/a/span/span[text()=\"{year}\"]'))).click()
-
-				y_selected = True
-
-
-			else:
-
-				print('some problem with the month/year selectors!')	
-
-			WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
-
-		print(f'selected date: {month.title()}, {year}')
-
-		return self	
+		return self
 
 	def _get_post_info(self, a):
 
@@ -142,13 +120,36 @@ class Fbdown:
 				aria_tx_ = a.get_attribute('aria-label')
 				if 'Video' in aria_tx_:
 					try:
-						post_id = re.search(r'(?<=videos\/)\d+(?=\/)', post_url).group(0)
+						post_id = self.vidid_re.search(post_url).group(0)
 					except:
 						pass
 			except:
 				pass
 
 		return {post_id: {'post_url': post_url}}
+
+	def scroll2(self):
+
+		try:
+			_ = WebDriverWait(self.driver, self.wait) \
+								.until(EC.presence_of_element_located((By.XPATH, 
+									'//div[@id="initial_browse_result"]/div[@id="pagelet_loader_initial_browse_result"]/div/div')))
+		except:
+			raise Exception('couldn\'t find the initial browse result div!')
+
+		while 1:
+
+			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+
+			d = _.find_element_by_xpath('child::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
+
+			for a in d:
+				print(a.get_attribute('href'))
+				self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+
+			d = _.find_element_by_xpath('child::div').find_element_by_xpath('following-sibling::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
+			
+		return self
 
 
 	def scroll_and_collect(self, max_items=10):
@@ -277,7 +278,7 @@ class Fbdown:
 		d = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
 		try:
-			d['when_posted'] = arrow.get(WebDriverWait(self.driver, self.WAIT_SECS) \
+			d['when_posted'] = arrow.get(WebDriverWait(self.driver, self.wait) \
 								.until(EC.visibility_of_element_located((By.XPATH, '//abbr[@title and @data-utime]'))) \
 									.get_attribute('data-utime')) \
 									.format('YYYY-MM-DD')
@@ -335,81 +336,128 @@ class Fbdown:
 		return {'content_url': url}
 
 
-	def search(self, tag, type='photos', month=None, year=None):
-
-		search_field = WebDriverWait(self.driver, self.WAIT_SECS) \
+	def search(self, tag, what='photos', month=None, year=None):
+		"""
+		search by tag and then filter by date; for photos there's an option to select specific month and year, 
+		but for videos you can pick the year only
+		"""
+		try:
+			WebDriverWait(self.driver, self.wait) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//input[@placeholder="Search"]'))) \
 								.send_keys(tag)
+		except:
+			raise Exception('couldn\'t find the search field up the top!')
 
-		time.sleep(5)
-
-		submit_button = WebDriverWait(self.driver, self.WAIT_SECS) \
+		try:
+			WebDriverWait(self.driver, self.wait) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//button[@type="submit"]'))) \
 								.click()
+		except:
+			raise Exception('couldn\'t click the submit button!')
 
-		time.sleep(2)
+		try:
+			WebDriverWait(self.driver, self.wait) \
+							.until(EC.visibility_of_element_located((By.XPATH, '//div[@role="heading" and @aria-level="3"]')))
+		except:
+			if self.driver.find_element_by_class_name('clearfix'):
+				raise Exception('couldn\'t find anything...')
+			else:
+				raise Exception('couldn\'t find anything but no nothing found icon either!')
 
-		tb_ = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.element_to_be_clickable((By.XPATH, f'//li[@data-edge="keywords_blended_{type}"]/a[@href]'))).click()
-		
-		time.sleep(2)
+		# not it's time to click on Photos or Videos in the panel menu
+		WebDriverWait(self.driver, self.wait) \
+					.until(EC.element_to_be_clickable((By.XPATH, f'//li[@data-edge="keywords_blended_{what}"]/a[@href]'))) \
+					.click()
 
-		if type == 'photos':
+		if what == 'photos':
+			try:
+				WebDriverWait(self.driver, self.wait) \
+						.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
+			except:
+				raise Exception('no Public Photos section!')
+
+		elif what == 'videos':
+			try:
+				WebDriverWait(self.driver, self.wait) \
+					.until(EC.presence_of_element_located((By.XPATH, '//div[@role="VIDEOS"]')))
+			except:
+				raise Exception('can\'t see a single video in search results!')
+		else:
+			raise ValueError('you have to choose either photos or videos!')
+
+		date_posted = WebDriverWait(self.driver, self.wait) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//h4[text()="DATE POSTED"]')))
+
+		# check what date options are available; you'd expect to see something like ['any date', '2018', '2017', '2016']
+		# note that the select month/year option won't appear on this list
+
+		opts_ = date_posted.find_elements_by_xpath('../a[@role="radio"]')
+		opts_tx =[_.text.lower().strip() for _ in date_posted.find_elements_by_xpath('../a[@role="radio"]')]
+
+		if (not month) and (str(year) in opts_tx):
 
 			try:
-	
-				e_ = WebDriverWait(self.driver, self.WAIT_SECS) \
-						.until(EC.visibility_of_element_located((By.XPATH, '//div[text()="Public photos"]')))
+				opts_[opts_tx.index(str(year))].click()
+			except:
+				raise Exception(f'couldn\'t click on year {year} in Date Posted!')
+
+		elif month and year and (what == 'photos'):
+
+			try:
+				date_posted.find_element_by_xpath('../div[@role="radio"]').click()
 			except:
 				pass
 
+			try:
+				m_selector, y_selector = date_posted.find_elements_by_xpath('../descendant::a[@rel="toggle"]')
+			except:
+				raise ValueError('can\'t find the month and year selectors!')
 		
+			m_selector.click()
 
-		if year and (not month):
-			# find and click the right year option
+			WebDriverWait(self.driver, self.wait) \
+						.until(EC.visibility_of_element_located((By.XPATH, 
+							f'//ul[@role="menu"]/li/a/span/span[text()=\"{month.title()}\"]'))) \
+								.click()
+			y_selector.click()
 
-			date_posted = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.visibility_of_element_located((By.XPATH, '//h4[text()="DATE POSTED"]')))
+			WebDriverWait(self.driver, self.wait) \
+						.until(EC.visibility_of_element_located((By.XPATH, 
+							f'//ul[@role="menu"]/li/a/span/span[text()=\"{year}\"]'))) \
+								.click()
+		else:
+			raise Exception('something is wrong with your attempt to search...')
 
-			as_ = date_posted.find_elements_by_xpath('../a[@role="radio"]')
+		if what == 'photos':
 
 			try:
-				[a for a in as_ if year == a.text.strip()].pop().click()
+				WebDriverWait(self.driver, self.wait) \
+					.until(EC.visibility_of_element_located((By.XPATH, '//a[text()="See all"]'))).click()
 			except:
-				print(f'{type} for {year} are unavailable!')
+				raise Exception('can\'t click on See All!')
 
-		elif year and month and (type == 'photos'):
-
-			self._choose_date(month=month, year=year)
-
-		else:
-			print(f'date selected incorrectly for {type}')
-			return None
-	
-		if (type == 'photos'):
-			see_all = WebDriverWait(self.driver, self.WAIT_SECS) \
-					.until(EC.visibility_of_element_located((By.XPATH, '//a[text()="See all"]')))
-
-			see_all.click()
-
-			time.sleep(5)
-
-			self.scroll_and_collect()
-
-			for p in self.posts:
-				self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
-
-		elif (type == 'videos'):
-
-			self.scroll_and_collect_video()
-
-			for i, p in enumerate(self.posts, 1):
-				if i%10 == 0:
-					break
-				self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
-				self.posts[p].update(self.get_mob_post(self.posts[p]['post_url']))
+			try:
+				WebDriverWait(self.driver, self.wait) \
+					.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'div.uiScaledImageContainer')))
+			except:
+				raise Exception('display picture doesn\'t appear following See All!')
 
 		return self
+
+		# 	self.scroll_and_collect()
+
+		# 	for p in self.posts:
+		# 		self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
+
+		# elif (type == 'videos'):
+
+		# 	self.scroll_and_collect_video()
+
+		# 	for i, p in enumerate(self.posts, 1):
+		# 		if i%10 == 0:
+		# 			break
+		# 		self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
+		# 		self.posts[p].update(self.get_mob_post(self.posts[p]['post_url']))
 
 	def save(self):
 
@@ -447,13 +495,13 @@ class Fbdown:
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', type='videos', year='2017')
+	fbd = Fbdown().login().search('timtamslam', what='photos', year='2017', month='june').scroll2()
 
-	for i, k in enumerate(fbd.posts, 1):
-		if i == 10:
-			break
-		fbd.get_content(k, fbd.posts[k].get('content_url', None))
+	# for i, k in enumerate(fbd.posts, 1):
+	# 	if i == 10:
+	# 		break
+	# 	fbd.get_content(k, fbd.posts[k].get('content_url', None))
 
-	fbd.save()
+	# fbd.save()
 
 
