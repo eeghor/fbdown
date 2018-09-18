@@ -88,7 +88,7 @@ class Fbdown:
 		if not btn_:
 			try:
 				btn_ = WebDriverWait(self.driver, self.wait) \
-							.until(EC.element_to_be_clickable((By.XPATH, '[//button[@type="submit"]]')))
+							.until(EC.element_to_be_clickable((By.XPATH, '[//button[@name="login"]]')))
 			except:
 				pass
 
@@ -129,6 +129,19 @@ class Fbdown:
 
 		return {post_id: {'post_url': post_url}}
 
+	def another_block(self, i=-1):
+
+			while True:
+
+				i += 1
+
+				if i == 0:
+					yield 'BrowseResultsContainer'
+				elif i == 1:
+					yield 'u_ps_fetchstream_6_3_0_browse_result_below_fold'
+				elif i > 1:
+					yield f'fbBrowseScrollingPagerContainer{i-2}'
+
 	def scroll2(self):
 
 		refs_ = set()
@@ -137,12 +150,14 @@ class Fbdown:
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 		heights_.append(hight_)
 
-		ls = ['BrowseResultsContainer', 'u_ps_fetchstream_6_3_0_browse_result_below_fold', 'fbBrowseScrollingPagerContainer0',
-		'fbBrowseScrollingPagerContainer1']
+		
 
-		for n, blc_id in enumerate(ls[:3]):
+		for n, blc_id in enumerate(self.another_block()):
 
-			print('n=', n)
+			print('blc_id=', blc_id)
+
+			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+			time.sleep(4)
 
 			try:
 				blc = WebDriverWait(self.driver, self.wait) \
@@ -154,39 +169,14 @@ class Fbdown:
 			ch_ = blc.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
 			print(f'children of {blc_id}:', len(ch_))
 
-			for _ in ch_:
-				refs_.add(_.get_attribute('href'))
+			refs_.update({_.get_attribute('href') for _ in ch_})
 
-			print('links:', len(refs_))
+			for _ in range(len(ch_)//2 if len(ch_) < 8 else 2):
 
-			# print(refs_)
-
-			# for i, d in enumerate(ch_, 1):
-			# 	print(f'{i}')
-			# 	for a in d.find_elements_by_xpath('descendant::a[@href]'):
-			# 		lnk = a.get_attribute('href')
-			# 		if 'photos' in lnk:
-			# 			refs_.add(lnk)
-
-			# print(f'links > {blc_id}: {len(refs_)}')
-
-			got_next_ = False
-
-			while not got_next_:
-
-				for _ in range(len(ch_)//2):
-					print('scrolling..')
-					self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
-					time.sleep(3)
-
-				try:
-					 WebDriverWait(self.driver, 5) \
-					 				.until(EC.visibility_of_element_located((By.ID, ls[n+1])))
-					 got_next_ = True
-					 new_height = self.driver.execute_script("return document.body.scrollHeight")
-					 heights_.append(new_height)
-				except:
-					pass
+				self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+			
+			new_height = self.driver.execute_script("return document.body.scrollHeight")
+			heights_.append(new_height)
 
 			
 
@@ -225,6 +215,7 @@ class Fbdown:
 		# 	d = _.find_element_by_xpath('child::div').find_element_by_xpath('following-sibling::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
 			
 		return self
+
 
 
 	def scroll_and_collect(self, max_items=10):
