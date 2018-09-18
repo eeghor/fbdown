@@ -142,34 +142,34 @@ class Fbdown:
 				elif i > 1:
 					yield f'fbBrowseScrollingPagerContainer{i-2}'
 
-	def scroll2(self):
+	def scroll2(self, max_res=12):
 
 		refs_ = set()
 		heights_ = []
 
+		end_results = last_page = got_max = still_loading = False
+
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 		heights_.append(hight_)
 
-		
-
 		for n, blc_id in enumerate(self.another_block()):
 
-			print('blc_id=', blc_id)
-
 			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
-			time.sleep(4)
 
 			try:
 				blc = WebDriverWait(self.driver, self.wait) \
 										.until(EC.presence_of_element_located((By.ID, blc_id)))
 			except:
-				raise Exception(f'can\'t find block {blc_id}!')
+				print(f'can\'t find block {blc_id}!')
+				break
 
 			# collect links from this block
-			ch_ = blc.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
+			ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
 			print(f'children of {blc_id}:', len(ch_))
 
 			refs_.update({_.get_attribute('href') for _ in ch_})
+
+			print('collected urls:', len(refs_))
 
 			for _ in range(len(ch_)//2 if len(ch_) < 8 else 2):
 
@@ -178,44 +178,32 @@ class Fbdown:
 			new_height = self.driver.execute_script("return document.body.scrollHeight")
 			heights_.append(new_height)
 
-			
+			try:
+				end_results = bool(self.driver.find_element_by_xpath('//div[text()="End of results"]'))
+			except:
+				pass
 
+			last_page = (heights_[-3:].count(heights_[-1]) == 3)
 
-				# # Loading more results... or span role=progressbar aria-valuetext=Loading... fbBrowseScrollingPagerContainer111
-				# try:
-				# 	_ = self.driver.find_element_by_xpath('//div[text()="End of results"]')
-				# 	print('got to the end of results')
-				# 	got_all_ = True
-				# except:
-				# 	continue
+			got_max = (len(refs_) >= max_res)
+
+			try:
+				still_loading = bool(self.driver.find_element_by_xpath('//span[@role="progressbar"]'))
+				print('found progress bar..')
+			except:
+				pass
+
+			if any([end_results, last_page]):
+				if not still_loading:
+					break
+				else:
+					time.sleep(5)
+
+			if got_max:
+				print(f'collected enough urls, {len(refs_)}')
+				break
 
 		return self
-
-
-			
-
-			
-
-			# time.sleep(5)
-
-			# for el in _.find_element_by_xpath('following-sibling::div'):
-			# 	print('sibling id=', el.get_attribute('id'))
-
-
-		# while 1:
-
-		# 	self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
-
-		# 	d = _.find_element_by_xpath('child::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
-
-		# 	for a in d:
-		# 		print(a.get_attribute('href'))
-		# 		self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
-
-		# 	d = _.find_element_by_xpath('child::div').find_element_by_xpath('following-sibling::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
-			
-		return self
-
 
 
 	def scroll_and_collect(self, max_items=10):
