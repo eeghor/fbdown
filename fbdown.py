@@ -4,6 +4,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.touch_actions import TouchActions
 
 import time
 import json
@@ -130,24 +131,98 @@ class Fbdown:
 
 	def scroll2(self):
 
-		try:
-			_ = WebDriverWait(self.driver, self.wait) \
-								.until(EC.presence_of_element_located((By.XPATH, 
-									'//div[@id="initial_browse_result"]/div[@id="pagelet_loader_initial_browse_result"]/div/div')))
-		except:
-			raise Exception('couldn\'t find the initial browse result div!')
+		refs_ = set()
+		heights_ = []
 
-		while 1:
+		hight_ = self.driver.execute_script("return document.body.scrollHeight")
+		heights_.append(hight_)
 
-			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+		ls = ['BrowseResultsContainer', 'u_ps_fetchstream_6_3_0_browse_result_below_fold', 'fbBrowseScrollingPagerContainer0',
+		'fbBrowseScrollingPagerContainer1']
 
-			d = _.find_element_by_xpath('child::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
+		for n, blc_id in enumerate(ls[:3]):
 
-			for a in d:
-				print(a.get_attribute('href'))
-				self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+			print('n=', n)
 
-			d = _.find_element_by_xpath('child::div').find_element_by_xpath('following-sibling::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
+			try:
+				blc = WebDriverWait(self.driver, self.wait) \
+										.until(EC.presence_of_element_located((By.ID, blc_id)))
+			except:
+				raise Exception(f'can\'t find block {blc_id}!')
+
+			# collect links from this block
+			ch_ = blc.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
+			print(f'children of {blc_id}:', len(ch_))
+
+			for _ in ch_:
+				refs_.add(_.get_attribute('href'))
+
+			print('links:', len(refs_))
+
+			# print(refs_)
+
+			# for i, d in enumerate(ch_, 1):
+			# 	print(f'{i}')
+			# 	for a in d.find_elements_by_xpath('descendant::a[@href]'):
+			# 		lnk = a.get_attribute('href')
+			# 		if 'photos' in lnk:
+			# 			refs_.add(lnk)
+
+			# print(f'links > {blc_id}: {len(refs_)}')
+
+			got_next_ = False
+
+			while not got_next_:
+
+				for _ in range(len(ch_)//2):
+					print('scrolling..')
+					self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+					time.sleep(3)
+
+				try:
+					 WebDriverWait(self.driver, 5) \
+					 				.until(EC.visibility_of_element_located((By.ID, ls[n+1])))
+					 got_next_ = True
+					 new_height = self.driver.execute_script("return document.body.scrollHeight")
+					 heights_.append(new_height)
+				except:
+					pass
+
+			
+
+
+				# # Loading more results... or span role=progressbar aria-valuetext=Loading... fbBrowseScrollingPagerContainer111
+				# try:
+				# 	_ = self.driver.find_element_by_xpath('//div[text()="End of results"]')
+				# 	print('got to the end of results')
+				# 	got_all_ = True
+				# except:
+				# 	continue
+
+		return self
+
+
+			
+
+			
+
+			# time.sleep(5)
+
+			# for el in _.find_element_by_xpath('following-sibling::div'):
+			# 	print('sibling id=', el.get_attribute('id'))
+
+
+		# while 1:
+
+		# 	self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+
+		# 	d = _.find_element_by_xpath('child::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
+
+		# 	for a in d:
+		# 		print(a.get_attribute('href'))
+		# 		self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+
+		# 	d = _.find_element_by_xpath('child::div').find_element_by_xpath('following-sibling::div').find_elements_by_xpath('descendant::a[@href and @rel="theater"]')
 			
 		return self
 
@@ -166,6 +241,8 @@ class Fbdown:
 				else:
 					self.posts.update()
 
+		# The scrollHeight property returns the entire height of an element in pixels, 
+		# including padding, but not the border, scrollbar or margin
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 
 		c = 0
@@ -203,7 +280,7 @@ class Fbdown:
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 		print('starting height is ', hight_)
 
-		print('scrolling...')
+		print('scrolling...')  # #u_ps_fetchstream_6_3_d > a > div
 
 		while 1:
 
