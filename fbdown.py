@@ -36,7 +36,7 @@ class Fbdown:
 		self.fbid_re = re.compile(r'(?<=p\.)\d+')
 		self.fbidm_re = re.compile(r'(?<=fbid=)\d+')	  		# fbid=10154685918546439
 		self.fbidt_re = re.compile(r'(?<=/)\d+(?=\/\?type)')    # /462352270791529/?type=
-		self.vidid_re = re.compile(r'(?<=videos\/)\d+(?=\/)')
+		self.vidid_re = re.compile(r'(?<=videos\/)\d+(?=\/)')   # videos/1672853176066872/
 
 		self.reactions = 'like love haha wow sad angry'.split()
 		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png']}
@@ -135,7 +135,7 @@ class Fbdown:
 			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
 			time.sleep(s)
 
-	def scroll2(self, max_res=12):
+	def scroll2(self, what='photos', max_res=12):
 
 		refs_ = set()
 		heights_ = []
@@ -147,6 +147,8 @@ class Fbdown:
 		heights_.append(hight_)
 
 		for n, blc_id in enumerate(self.another_block()):
+			
+			print(f'this block is: {blc_id}')
 
 			try:
 				blc = WebDriverWait(self.driver, self.wait) \
@@ -154,41 +156,35 @@ class Fbdown:
 			except:
 				print(f'can\'t find block {blc_id}!')
 				break
-
+	
 			# collect urls from this block
-			ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
 
+			if what == 'photos':
+				ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
+			elif what == 'videos':
+				ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div[role="VIDEOS"]>div>div>a[aria-label*="Video"]')
+
+				print(len(ch_), ' videos in ', blc_id)
 			if not ch_:
-				raise Exception(f'block {blc_id} appears to have no children!')
-
+				print (f'block {blc_id} appears to have no children!')
+				break
+	
 			refs_.update({_.get_attribute('href') for _ in ch_})
-
+	
 			self._scroll_and_wait(n=1)
 			
-			new_height = self.driver.execute_script("return document.body.scrollHeight")
-			heights_.append(new_height)
-
-			try:
-				end_results = bool(self.driver.find_element_by_xpath('//div[text()="End of results"]'))
-			except:
-				pass
-
+			heights_.append(self.driver.execute_script("return document.body.scrollHeight"))
+	
 			last_page = (heights_[-3:].count(heights_[-1]) == 3)
+
 			got_max = (len(refs_) >= max_res)
-
-			if end_results or last_page or got_max:
-
-				if end_results:
-					print('got to end results')
-				elif last_page:
-					print('cannot scroll anymore')
-				elif got_max:
-					print('collected enough posts, more than ', max_res)
-
+	
+			if got_max:
+				print('collected enough posts, more than ', max_res)
 				print('last searched block has id ', blc_id)
 				break
-
-		# process collected urls to extract post IDs
+	
+		# prs collected urls to extract post IDs
 		print('extracting post ids...')
 
 		for r in refs_:
@@ -205,12 +201,7 @@ class Fbdown:
 						post_id = self.fbidt_re.search(r).group(0)
 					except:
 						try:
-							aria_tx_ = r.get_attribute('aria-label')
-							if 'Video' in aria_tx_:
-								try:
-									post_id = self.vidid_re.search(r).group(0)
-								except:
-									pass
+							post_id = self.vidid_re.search(r).group(0)
 						except:
 							pass
 
@@ -228,89 +219,6 @@ class Fbdown:
 
 		return self
 
-
-	def scroll_and_collect(self, max_items=24):
-
-		for block_xpath in ['//div[@id="BrowseResultsContainer"]/div/div/div/a[@href]',
-								'//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]']:
-			for _ in self.driver.find_elements_by_xpath(block_xpath):
-
-				new_post_ = self._get_post_info(_)  # {post_id: {}}
-
-				if set(new_post_) & set(self.posts):
-					# no need to update, we have this post info already
-					pass
-				else:
-					self.posts.update()
-
-		# The scrollHeight property returns the entire height of an element in pixels, 
-		# including padding, but not the border, scrollbar or margin
-		hight_ = self.driver.execute_script("return document.body.scrollHeight")
-
-		c = 0
-
-		while len(self.posts) <= max_items:
-
-			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
-			time.sleep(5)
-
-			for _ in self.driver.find_elements_by_xpath(f'//div[@id="fbBrowseScrollingPagerContainer{c}"]/div/div/div/div/a[@href]'):
-
-				new_post_ = self._get_post_info(_)
-
-				if set(new_post_) & set(self.posts):
-					pass
-				else:
-					self.posts.update(new_post_)
-
-			print(f'collected urls so far: {len(self.posts)}')
-
-			new_height = self.driver.execute_script("return document.body.scrollHeight")
-
-			if new_height > hight_:
-				hight_ = new_height
-			else:
-				print('reached the bottom of the page')
-				break
-
-			c += 1
-
-		return self
-
-	def scroll_and_collect_video(self, max_items=47):
-
-		hight_ = self.driver.execute_script("return document.body.scrollHeight")
-		print('starting height is ', hight_)
-
-		print('scrolling...')  # #u_ps_fetchstream_6_3_d > a > div
-
-		while 1:
-
-			self.driver.execute_script(f"window.scrollTo(0, {hight_ + 200});")
-			
-			time.sleep(3)
-
-			new_height = self.driver.execute_script("return document.body.scrollHeight")
-			
-			print('now height is ', new_height)
-
-			if new_height != hight_:
-				hight_ = new_height
-			else:
-				print('reached the bottom of the page')
-				break
-
-		while len(self.posts) <= max_items:
-
-			for i, _ in enumerate(self.driver.find_elements_by_xpath('//div[@role="VIDEOS"]'), 1):
-				print('i=', i)
-				self.posts.update(self._get_post_info(_.find_element_by_xpath('descendant::a[@aria-label]')))
-				# r = _.find_element_by_xpath('//abbr[@data-utime]')
-				# posted = arrow.get(r.get_attribute('data-utime')).format('YYYY-MM-DD')
-				# print(f'posted on {posted}')
-		print(f'collected {len(self.posts)} videos')
-				
-		return self
 
 	def _get_metrics(self):
 
@@ -577,7 +485,7 @@ class Fbdown:
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', what='photos', year='2017', month='june').scroll2(max_res=25)
+	fbd = Fbdown().login().search('timtamslam', what='videos', year='2017').scroll2(max_res=40, what='videos')
 
 	# for i, k in enumerate(fbd.posts, 1):
 	# 	if i == 10:
