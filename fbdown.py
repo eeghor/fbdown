@@ -33,7 +33,9 @@ class Fbdown:
 
 		self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
 
-		self.fbid_re = re.compile(r'(?<=p.)\d+')	
+		self.fbid_re = re.compile(r'(?<=p\.)\d+')
+		self.fbidm_re = re.compile(r'(?<=fbid=)\d+')	  		# fbid=10154685918546439
+		self.fbidt_re = re.compile(r'(?<=/)\d+(?=\/\?type)')    # /462352270791529/?type=
 		self.vidid_re = re.compile(r'(?<=videos\/)\d+(?=\/)')
 
 		self.reactions = 'like love haha wow sad angry'.split()
@@ -62,7 +64,6 @@ class Fbdown:
 		"""
 		read credentials from a JSON file and log into your account
 		"""
-
 		try:
 			LOGIN = json.load(open(f'{self.creds_dir}/facebook.json'))
 		except:
@@ -76,7 +77,6 @@ class Fbdown:
 		self.driver.find_element_by_name('pass').send_keys(LOGIN['password'])
 
 		# find the right button to click, depending on what variation of the login page you're on
-
 		btn_ = None
 
 		try:
@@ -107,45 +107,39 @@ class Fbdown:
 
 		return self
 
-	def _get_post_info(self, a):
-
-		post_url = a.get_attribute('href')
-
-		post_id = None
-
-		# post id is a part of post url so we just extract it
-		try:
-			post_id = self.fbid_re.search(post_url).group(0)
-		except:
-			try:
-				aria_tx_ = a.get_attribute('aria-label')
-				if 'Video' in aria_tx_:
-					try:
-						post_id = self.vidid_re.search(post_url).group(0)
-					except:
-						pass
-			except:
-				pass
-
-		return {post_id: {'post_url': post_url}}
 
 	def another_block(self, i=-1):
 
-			while True:
+		"""
+		generator to produce the block names
+		"""
+		while True:
+			i += 1
+			if i == 0:
+				yield WebDriverWait(self.driver, self.wait) \
+									.until(EC.presence_of_element_located((By.ID, 
+										'BrowseResultsContainer'))) \
+									.get_attribute('id')
+			elif i == 1:
+				yield WebDriverWait(self.driver, self.wait) \
+									.until(EC.presence_of_element_located((By.XPATH, 
+										'//div[@id="BrowseResultsContainer"]/following-sibling::div[@id]'))) \
+									.get_attribute('id')
+			elif i > 1:
+				yield f'fbBrowseScrollingPagerContainer{i-2}'
 
-				i += 1
+	def _scroll_and_wait(self, n=1, s=3):
 
-				if i == 0:
-					yield 'BrowseResultsContainer'
-				elif i == 1:
-					yield 'u_ps_fetchstream_6_3_0_browse_result_below_fold'
-				elif i > 1:
-					yield f'fbBrowseScrollingPagerContainer{i-2}'
+		for _ in range(n):
+
+			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+			time.sleep(s)
 
 	def scroll2(self, max_res=12):
 
 		refs_ = set()
 		heights_ = []
+		relevant_posts = defaultdict(lambda: defaultdict())
 
 		end_results = last_page = got_max = still_loading = False
 
@@ -154,26 +148,22 @@ class Fbdown:
 
 		for n, blc_id in enumerate(self.another_block()):
 
-			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
-
 			try:
 				blc = WebDriverWait(self.driver, self.wait) \
-										.until(EC.presence_of_element_located((By.ID, blc_id)))
+										.until(EC.visibility_of_element_located((By.ID, blc_id)))
 			except:
 				print(f'can\'t find block {blc_id}!')
 				break
 
-			# collect links from this block
+			# collect urls from this block
 			ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
-			print(f'children of {blc_id}:', len(ch_))
+
+			if not ch_:
+				raise Exception(f'block {blc_id} appears to have no children!')
 
 			refs_.update({_.get_attribute('href') for _ in ch_})
 
-			print('collected urls:', len(refs_))
-
-			for _ in range(len(ch_)//2 if len(ch_) < 8 else 2):
-
-				self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
+			self._scroll_and_wait(n=1)
 			
 			new_height = self.driver.execute_script("return document.body.scrollHeight")
 			heights_.append(new_height)
@@ -184,29 +174,62 @@ class Fbdown:
 				pass
 
 			last_page = (heights_[-3:].count(heights_[-1]) == 3)
-
 			got_max = (len(refs_) >= max_res)
 
-			try:
-				still_loading = bool(self.driver.find_element_by_xpath('//span[@role="progressbar"]'))
-				print('found progress bar..')
-			except:
-				pass
+			if end_results or last_page or got_max:
 
-			if any([end_results, last_page]):
-				if not still_loading:
-					break
-				else:
-					time.sleep(5)
+				if end_results:
+					print('got to end results')
+				elif last_page:
+					print('cannot scroll anymore')
+				elif got_max:
+					print('collected enough posts, more than ', max_res)
 
-			if got_max:
-				print(f'collected enough urls, {len(refs_)}')
+				print('last searched block has id ', blc_id)
 				break
+
+		# process collected urls to extract post IDs
+		print('extracting post ids...')
+
+		for r in refs_:
+
+			post_id = None
+
+			try:
+				post_id = self.fbid_re.search(r).group(0)
+			except:
+				try:
+					post_id = self.fbidm_re.search(r).group(0)
+				except:
+					try:
+						post_id = self.fbidt_re.search(r).group(0)
+					except:
+						try:
+							aria_tx_ = r.get_attribute('aria-label')
+							if 'Video' in aria_tx_:
+								try:
+									post_id = self.vidid_re.search(r).group(0)
+								except:
+									pass
+						except:
+							pass
+
+			if not post_id:
+				print('no id for this one:')
+				print(r)
+
+			if post_id and (post_id not in relevant_posts):
+				relevant_posts[post_id]['post_url'] = r
+
+		
+		print(f'collected {len(relevant_posts)} url/id pairs')
+
+		json.dump(relevant_posts, open('ssq.json','w'))
 
 		return self
 
 
-	def scroll_and_collect(self, max_items=10):
+	def scroll_and_collect(self, max_items=24):
 
 		for block_xpath in ['//div[@id="BrowseResultsContainer"]/div/div/div/a[@href]',
 								'//div[@data-testid="paginated_results_pagelet"]/div/div/div/div/a[@href]']:
@@ -401,12 +424,13 @@ class Fbdown:
 			WebDriverWait(self.driver, self.wait) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//input[@placeholder="Search"]'))) \
 								.send_keys(tag)
+			time.sleep(2)
 		except:
 			raise Exception('couldn\'t find the search field up the top!')
 
 		try:
 			WebDriverWait(self.driver, self.wait) \
-							.until(EC.element_to_be_clickable((By.XPATH, '//button[@type="submit"]'))) \
+							.until(EC.element_to_be_clickable((By.XPATH, '//button[@type="submit"][@data-testid]'))) \
 								.click()
 		except:
 			raise Exception('couldn\'t click the submit button!')
@@ -484,6 +508,8 @@ class Fbdown:
 		else:
 			raise Exception('something is wrong with your attempt to search...')
 
+		time.sleep(5)
+
 		if what == 'photos':
 
 			try:
@@ -551,7 +577,7 @@ class Fbdown:
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', what='photos', year='2017', month='june').scroll2()
+	fbd = Fbdown().login().search('timtamslam', what='photos', year='2017', month='june').scroll2(max_res=25)
 
 	# for i, k in enumerate(fbd.posts, 1):
 	# 	if i == 10:
