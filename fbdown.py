@@ -10,6 +10,7 @@ import time
 import json
 import re
 import os
+import copy 
 
 import itertools
 
@@ -21,7 +22,7 @@ from collections import defaultdict
 
 class Fbdown:
 
-	def __init__(self, wait=30, post_dir='posts', video_dir='videos',
+	def __init__(self, wait=30, post_dir='posts', post_archive_dir='archive', video_dir='videos',
 				 picture_dir='pictures', creds_dir='credentials'):
 
 		self.wait = wait
@@ -45,13 +46,14 @@ class Fbdown:
 		self.video_dir = video_dir
 		self.picture_dir = picture_dir
 		self.post_dir = post_dir
+		self.post_archive_dir = post_archive_dir
 		self.creds_dir = creds_dir
 
 		if not os.path.exists(self.creds_dir):
 			self.driver.close()
 			raise Exception('can\'t find the credentials directory!')
 
-		for d in [self.post_dir, self.video_dir, self.picture_dir]:
+		for d in [self.post_dir, self.post_archive_dir, self.video_dir, self.picture_dir]:
 			if not os.path.exists(d):
 				os.mkdir(d)
 		try:
@@ -163,7 +165,6 @@ class Fbdown:
 
 		return post_id
 
-
 	def get_post_ids(self, what='photos', max_res=12):
 		"""
 		after the search results have been displayed, collect all post ids not yet available
@@ -190,7 +191,7 @@ class Fbdown:
 										.until(EC.visibility_of_element_located((By.ID, blc_id)))
 			except:
 				print(f'can\'t find block {blc_id}!')
-				break
+				continue
 	
 			# collect urls from this block
 
@@ -224,130 +225,108 @@ class Fbdown:
 				break
 	
 		# prs collected urls to extract post IDs
-		print('extracting post ids...')
+		print('filtering post ids...')
 
-		
+		for post_url, post_id in zip(refs_, ids_):
+			if post_id not in self.posts:
+				self.new_posts[post_id] = {'post_url': post_url}
 
-			
-
-			if all([post_id, post_id not in self.posts, post_id not in relevant_posts]):
-				relevant_posts[post_id]['post_url'] = r
-
-		
-		print(f'collected {len(relevant_posts)} new posts')
-
+		print(f'collected {len(self.new_posts)} new posts')
 
 		return self
 
-
-	def _get_metrics(self):
-
-		"""
-		assuming you're ON THE POST PAGE, pick up reactions, comments and shares and return as a dictionary; 
-		the dictionary is supposed to look like 
-			{'metrics': {'2019-09-10': {'comments': 3, 'shares': 8, ...}}
-		"""
-
-		dict_ = defaultdict(lambda: defaultdict(lambda: defaultdict()))
-
-		for _ in self.driver.find_elements_by_xpath('//a[@role="button"]'):
-
-			# search for comments or shares, they may sit in text
-			tx_ = _.text.lower()
-
-			if tx_:
-				for m in ['comments', 'shares']:
-					m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
-					if m_line:
-						dict_['metrics'][self.today][m] = int(m_line.group(0))
-
-			try:
-				aria_tx_ = _.get_attribute('aria-label').lower().strip()
-				
-				for m in self.reactions:
-					m_line = re.search(r'\d+\s+(?=' + f'{m})', aria_tx_)
-					if m_line:
-						dict_['metrics'][self.today][m + 's'] = int(m_line.group(0))
-			except:
-				continue
-
-		return dict_
-
-	def get_post_details(self, post_url):
+	def get_post_details(self):
 
 		"""
 		given a url to the post page, go there and pick up some post details, such as all metrics and date posted;
 		return these as a dictionary
 		"""
 
-		self.driver.get(post_url)
+		dict_ = copy.copy(self.new_posts)
 
-		d = defaultdict(lambda: defaultdict(lambda: defaultdict()))
+		for p in self.new_posts:
 
-		try:
-			d['when_posted'] = arrow.get(WebDriverWait(self.driver, self.wait) \
-								.until(EC.visibility_of_element_located((By.XPATH, '//abbr[@title and @data-utime]'))) \
-									.get_attribute('data-utime')) \
-									.format('YYYY-MM-DD')
-		except:
-			# if a post has no timestamp, it's useless
-			print('WARNING: found a post without a timestamp!')
-			return d
+			self.driver.get(self.new_posts[p]['post_url'])
 
-		d.update(self._get_metrics())
+			# dictionary to collect post info; attach it to the post ID key
+			this_post = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
-		# find content url, first for pictures
-		try:
-			curl_ = self.driver.find_element_by_class_name('spotlight').get_attribute('src')
-		except:
-			pass
-
-		# now try for videos
-		try:
-
-			ActionChains(self.driver) \
-					.move_to_element(self.driver.find_element_by_xpath('//video[@src]')) \
-					.context_click() \
-					.perform()
-
-			curl_ = self.driver.find_element_by_xpath('//span[@value]').get_attribute('value')			
-		except:
-			pass
-
-		d['content_url'] = curl_
-
-		return d
-
-	def get_mob_post(self, post_url):
-		"""
-		get direct video url 
-		https://www.facebook.com/abccoffscoast/videos/2117273828315294/
-		https://m.facebook.com
-		"""
-
-		self.driver.get(post_url.replace('www', 'm'))
-
-		try:
-			_ = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
-		except:
+			# get when posted
 			try:
-				_ = self.driver.find_element_by_xpath('//div[@data-sigil="photo-image"]')
+				this_post['when_posted'] = arrow.get(WebDriverWait(self.driver, self.wait) \
+									.until(EC.visibility_of_element_located((By.XPATH, '//abbr[@title and @data-utime]'))) \
+										.get_attribute('data-utime')) \
+										.format('YYYY-MM-DD')
 			except:
-				return {'content_url': None}
+				# if a post has no timestamp, it's useless
+				print('WARNING: found a post without a timestamp! skipping..')
+				continue
 
-		# this data-store looks like a dictionary but it's a string
-		ds_ = json.loads(_.get_attribute('data-store'))
+			# get comments, shares and reactions
+			for _ in self.driver.find_elements_by_xpath('//a[@role="button"]'):
+	
+				# search for comments or shares, they may sit in text
+				tx_ = _.text.lower()
+	
+				if tx_:
+					for m in ['comments', 'shares']:
+						m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
+						if m_line:
+							this_post['metrics'][self.today][m] = int(m_line.group(0))
+	
+				try:
+					aria_tx_ = _.get_attribute('aria-label').lower().strip()
+					
+					for m in self.reactions:
+						m_line = re.search(r'\d+\s+(?=' + f'{m})', aria_tx_)
+						if m_line:
+							this_post['metrics'][self.today][m + 's'] = int(m_line.group(0))
+				except:
+					continue
 
-		url = ds_['src']
+			# find content url, first for pictures
+			try:
+				this_post['content_url'] = self.driver.find_element_by_class_name('spotlight').get_attribute('src')
+			except:
+				try:
+	
+					# ActionChains(self.driver) \
+					# 		.move_to_element(self.driver.find_element_by_xpath('//video[@src]')) \
+					# 		.context_click() \
+					# 		.perform()
 
-		return {'content_url': url}
+					# need to visit the mobile version of the post
+					self.driver.get(dict_[p]['post_url'].replace('www', 'm'))
 
+					try:
+						e = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
+					except:
+						try:
+							e = self.driver.find_element_by_xpath('//div[@data-sigil="photo-image"]')
+						except:
+							print('can\'t find content url!')
+
+					try:
+						# this data-store looks like a dictionary but it's a string
+						this_post['content_url'] = json.loads(e.get_attribute('data-store'))['src']
+					except:
+						pass
+				except:
+					continue
+
+			dict_[p] = this_post
+
+		self.new_posts = dict_
+
+		return self
 
 	def search(self, tag, what='photos', month=None, year=None):
 		"""
 		search by tag and then filter by date; for photos there's an option to select specific month and year, 
 		but for videos you can pick the year only
 		"""
+		self.driver.get('https://www.facebook.com/')
+
 		try:
 			WebDriverWait(self.driver, self.wait) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//input[@placeholder="Search"]'))) \
@@ -455,8 +434,12 @@ class Fbdown:
 		return self
 
 	def save(self):
+		"""
+		update posts with the new ones and save to s JSON
+		"""
+		json.dump({**self.posts, **self.new_posts}, open(f'{self.post_dir}/posts.json','w'))
 
-		json.dump(self.posts, open(f'{self.post_dir}/posts.json','w'))
+		json.dump(self.posts, open(f'{self.post_archive_dir}/posts_{arrow.get(self.today).format("YYYYMMDD")}.json','w'))
 
 		return self
 
@@ -489,7 +472,11 @@ class Fbdown:
 if __name__ == '__main__':
 
 	fbd = Fbdown().login().search('timtamslam', what='videos', year='2017') \
-					.get_post_ids(max_res=40, what='videos')
+					.get_post_ids(max_res=15, what='videos') \
+					.get_post_details().save() \
+					.search('timtamslam', what='photos', year='2017') \
+					.get_post_ids(max_res=15, what='photos') \
+					.get_post_details().save()
 
 
 
