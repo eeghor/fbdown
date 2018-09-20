@@ -21,8 +21,8 @@ from collections import defaultdict
 
 class Fbdown:
 
-	def __init__(self, wait=30, post_dir='posts', video_dir='videos', picture_dir='pictures',
-						creds_dir='credentials'):
+	def __init__(self, wait=30, post_dir='posts', video_dir='videos',
+				 picture_dir='pictures', creds_dir='credentials'):
 
 		self.wait = wait
 
@@ -33,6 +33,7 @@ class Fbdown:
 
 		self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
 
+		# some useful regex expressions to capture post IDs
 		self.fbid_re = re.compile(r'(?<=p\.)\d+')
 		self.fbidm_re = re.compile(r'(?<=fbid=)\d+')	  		# fbid=10154685918546439
 		self.fbidt_re = re.compile(r'(?<=/)\d+(?=\/\?type)')    # /462352270791529/?type=
@@ -59,6 +60,8 @@ class Fbdown:
 		except:
 			self.posts = defaultdict(lambda: defaultdict())
 			print('starting a new post collection...')
+
+		self.new_posts = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
 	def login(self):
 		"""
@@ -107,14 +110,14 @@ class Fbdown:
 
 		return self
 
-
-	def another_block(self, i=-1):
-
+	def block_generator(self, i=-1):
 		"""
-		generator to produce the block names
+		generator to produce block IDs
 		"""
 		while True:
-			i += 1
+
+			i += 1    # so that i starts from 0
+
 			if i == 0:
 				yield WebDriverWait(self.driver, self.wait) \
 									.until(EC.presence_of_element_located((By.ID, 
@@ -129,26 +132,58 @@ class Fbdown:
 				yield f'fbBrowseScrollingPagerContainer{i-2}'
 
 	def _scroll_and_wait(self, n=1, s=3):
-
+		"""
+		do full page scroll n times, wait s seconds between scrolls
+		"""
 		for _ in range(n):
 
 			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
 			time.sleep(s)
 
-	def scroll2(self, what='photos', max_res=12):
+	def _get_post_id(self, url):
 
-		refs_ = set()
+		post_id = None
+
+		try:
+			post_id = self.fbid_re.search(url).group(0)
+		except:
+			try:
+				post_id = self.fbidm_re.search(url).group(0)
+			except:
+				try:
+					post_id = self.fbidt_re.search(url).group(0)
+				except:
+					try:
+						post_id = self.vidid_re.search(url).group(0)
+					except:
+						pass
+
+		if not post_id:
+			print(f'no id in {url}!')
+
+		return post_id
+
+
+	def get_post_ids(self, what='photos', max_res=12):
+		"""
+		after the search results have been displayed, collect all post ids not yet available
+		"""
+		if what not in 'photos videos'.split():
+			raise ValueError('get_post_ids needs parameter *what* to be either *photos* or *videos*!')
+
+		refs_ = []  
+		ids_ = []
+
 		heights_ = []
-		relevant_posts = defaultdict(lambda: defaultdict())
 
-		end_results = last_page = got_max = still_loading = False
+		end_results = is_last_page = reached_max = still_loading = False
 
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 		heights_.append(hight_)
 
-		for n, blc_id in enumerate(self.another_block()):
+		for n, blc_id in enumerate(self.block_generator()):
 			
-			print(f'this block is: {blc_id}')
+			print(f'block ID: {blc_id}')
 
 			try:
 				blc = WebDriverWait(self.driver, self.wait) \
@@ -164,58 +199,43 @@ class Fbdown:
 			elif what == 'videos':
 				ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div[role="VIDEOS"]>div>div>a[aria-label*="Video"]')
 
-				print(len(ch_), ' videos in ', blc_id)
 			if not ch_:
-				print (f'block {blc_id} appears to have no children!')
-				break
+				print (f'this block appears to have no children! moving on to the next one')
+				continue
 	
-			refs_.update({_.get_attribute('href') for _ in ch_})
-	
+			refs_.extend([_.get_attribute('href') for _ in ch_])
+			
+			ids_.extend([self._get_post_id(r) for r in refs_])
+
 			self._scroll_and_wait(n=1)
 			
 			heights_.append(self.driver.execute_script("return document.body.scrollHeight"))
 	
-			last_page = (heights_[-3:].count(heights_[-1]) == 3)
+			is_last_page = (heights_[-3:].count(heights_[-1]) == 3)
 
-			got_max = (len(refs_) >= max_res)
+			reached_max = (len(refs_) >= max_res)
 	
-			if got_max:
-				print('collected enough posts, more than ', max_res)
-				print('last searched block has id ', blc_id)
+			if reached_max:
+				print(f'collected {len(refs_)} posts, more than requested max {max_res}; last searched block id: {blc_id}')
+				break
+
+			if is_last_page:
+				print(f'apparently, nowhere to scroll. last 3 page heights: {", ".join(heights_[-3:])}')
 				break
 	
 		# prs collected urls to extract post IDs
 		print('extracting post ids...')
 
-		for r in refs_:
+		
 
-			post_id = None
+			
 
-			try:
-				post_id = self.fbid_re.search(r).group(0)
-			except:
-				try:
-					post_id = self.fbidm_re.search(r).group(0)
-				except:
-					try:
-						post_id = self.fbidt_re.search(r).group(0)
-					except:
-						try:
-							post_id = self.vidid_re.search(r).group(0)
-						except:
-							pass
-
-			if not post_id:
-				print('no id for this one:')
-				print(r)
-
-			if post_id and (post_id not in relevant_posts):
+			if all([post_id, post_id not in self.posts, post_id not in relevant_posts]):
 				relevant_posts[post_id]['post_url'] = r
 
 		
-		print(f'collected {len(relevant_posts)} url/id pairs')
+		print(f'collected {len(relevant_posts)} new posts')
 
-		json.dump(relevant_posts, open('ssq.json','w'))
 
 		return self
 
@@ -434,21 +454,6 @@ class Fbdown:
 
 		return self
 
-		# 	self.scroll_and_collect()
-
-		# 	for p in self.posts:
-		# 		self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
-
-		# elif (type == 'videos'):
-
-		# 	self.scroll_and_collect_video()
-
-		# 	for i, p in enumerate(self.posts, 1):
-		# 		if i%10 == 0:
-		# 			break
-		# 		self.posts[p].update(self.get_post_details(self.posts[p]['post_url']))
-		# 		self.posts[p].update(self.get_mob_post(self.posts[p]['post_url']))
-
 	def save(self):
 
 		json.dump(self.posts, open(f'{self.post_dir}/posts.json','w'))
@@ -481,17 +486,10 @@ class Fbdown:
 
 		return self
 
-
-
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', what='videos', year='2017').scroll2(max_res=40, what='videos')
+	fbd = Fbdown().login().search('timtamslam', what='videos', year='2017') \
+					.get_post_ids(max_res=40, what='videos')
 
-	# for i, k in enumerate(fbd.posts, 1):
-	# 	if i == 10:
-	# 		break
-	# 	fbd.get_content(k, fbd.posts[k].get('content_url', None))
-
-	# fbd.save()
 
 
