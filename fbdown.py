@@ -3,8 +3,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.action_chains import ActionChains
-from selenium.webdriver.common.touch_actions import TouchActions
 
 import time
 import json
@@ -31,6 +29,7 @@ class Fbdown:
 
 		options = webdriver.ChromeOptions()
 		options.add_argument('disable-notifications')
+		# options.add_argument('headless')
 
 		self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
 
@@ -41,7 +40,7 @@ class Fbdown:
 		self.vidid_re = re.compile(r'(?<=videos\/)\d+(?=\/)')   # videos/1672853176066872/
 
 		self.reactions = 'like love haha wow sad angry'.split()
-		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png']}
+		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png', 'gif']}
 
 		self.video_dir = video_dir
 		self.picture_dir = picture_dir
@@ -165,19 +164,20 @@ class Fbdown:
 
 		return post_id
 
-	def get_post_ids(self, what='photos', max_res=12):
+	def get_post_ids(self, what='photos'):
 		"""
 		after the search results have been displayed, collect all post ids not yet available
 		"""
 		if what not in 'photos videos'.split():
 			raise ValueError('get_post_ids needs parameter *what* to be either *photos* or *videos*!')
 
-		refs_ = []  
-		ids_ = []
+		refs_ = set() 
 
 		heights_ = []
 
-		end_results = is_last_page = reached_max = still_loading = False
+		posts_per_block = []
+
+		is_last_page = reached_max = False
 
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 		heights_.append(hight_)
@@ -201,12 +201,12 @@ class Fbdown:
 				ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div[role="VIDEOS"]>div>div>a[aria-label*="Video"]')
 
 			if not ch_:
-				print (f'this block appears to have no children! moving on to the next one')
+				print (f'no photos or videos here! moving on...')
 				continue
+			else:
+				posts_per_block.append(len(ch_))
 	
-			refs_.extend([_.get_attribute('href') for _ in ch_])
-			
-			ids_.extend([self._get_post_id(r) for r in refs_])
+			refs_ |= {_.get_attribute('href') for _ in ch_}
 
 			self._scroll_and_wait(n=1)
 			
@@ -214,22 +214,25 @@ class Fbdown:
 	
 			is_last_page = (heights_[-3:].count(heights_[-1]) == 3)
 
-			reached_max = (len(refs_) >= max_res)
+			# reached_max = (len(refs_) >= max_res)
 	
-			if reached_max:
-				print(f'collected {len(refs_)} posts, more than requested max {max_res}; last searched block id: {blc_id}')
-				break
+			# if reached_max:
+			# 	print(f'collected {len(refs_)} posts, more than requested max {max_res}; last searched block id: {blc_id}')
+			# 	break
 
 			if is_last_page:
-				print(f'apparently, nowhere to scroll. last 3 page heights: {", ".join(heights_[-3:])}')
+				print(f'apparently, nowhere to scroll. last 3 page heights: {", ".join([str(h) for h in heights_[-3:]])}')
 				break
 	
-		# prs collected urls to extract post IDs
+		# parse collected urls to extract post IDs; note we now have urls for all blocks
 		print('filtering post ids...')
 
-		for post_url, post_id in zip(refs_, ids_):
+		print(f'expected posts: {sum(posts_per_block)}')
+
+		for post_url in list(refs_):
+			post_id = self._get_post_id(post_url)
 			if post_id not in self.posts:
-				self.new_posts[post_id] = {'post_url': post_url}
+				self.new_posts[post_id]['post_url'] = post_url
 
 		print(f'collected {len(self.new_posts)} new posts')
 
@@ -244,16 +247,18 @@ class Fbdown:
 
 		dict_ = copy.copy(self.new_posts)
 
-		for p in self.new_posts:
+		for p in dict_:
 
-			self.driver.get(self.new_posts[p]['post_url'])
+			url_ = dict_[p]['post_url']
+
+			self.driver.get(url_)
 
 			# dictionary to collect post info; attach it to the post ID key
 			this_post = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
 			# get when posted
 			try:
-				this_post['when_posted'] = arrow.get(WebDriverWait(self.driver, self.wait) \
+				this_post['posted'] = arrow.get(WebDriverWait(self.driver, self.wait) \
 									.until(EC.visibility_of_element_located((By.XPATH, '//abbr[@title and @data-utime]'))) \
 										.get_attribute('data-utime')) \
 										.format('YYYY-MM-DD')
@@ -263,17 +268,19 @@ class Fbdown:
 				continue
 
 			# get comments, shares and reactions
-			for _ in self.driver.find_elements_by_xpath('//a[@role="button"]'):
+			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@data-hover="tooltip"]'):
 	
 				# search for comments or shares, they may sit in text
 				tx_ = _.text.lower()
 	
 				if tx_:
 					for m in ['comments', 'shares']:
-						m_line = re.search(r'\d+\s+(?=' + f'{m})', tx_)
-						if m_line:
-							this_post['metrics'][self.today][m] = int(m_line.group(0))
-	
+						try:
+							this_post['metrics'][self.today][m] = int(re.search(r'\d+\s+(?=' + f'{m})', tx_).group(0))
+						except:
+							pass
+			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-label]'):
+				
 				try:
 					aria_tx_ = _.get_attribute('aria-label').lower().strip()
 					
@@ -286,17 +293,17 @@ class Fbdown:
 
 			# find content url, first for pictures
 			try:
-				this_post['content_url'] = self.driver.find_element_by_class_name('spotlight').get_attribute('src')
-			except:
-				try:
-	
-					# ActionChains(self.driver) \
-					# 		.move_to_element(self.driver.find_element_by_xpath('//video[@src]')) \
-					# 		.context_click() \
-					# 		.perform()
 
+				this_post['content_url'] = WebDriverWait(self.driver, self.wait) \
+												.until(EC.element_to_be_clickable((By.XPATH, '//img[@class="spotlight"][@alt][@src]'))) \
+												.get_attribute('src')
+			except:
+				print('now searching for video or special image content url..')
+				try:
 					# need to visit the mobile version of the post
-					self.driver.get(dict_[p]['post_url'].replace('www', 'm'))
+					rul_mob_ = dict_[p]['post_url'].replace('www', 'm')
+
+					self.driver.get(rul_mob_)
 
 					try:
 						e = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
@@ -304,17 +311,20 @@ class Fbdown:
 						try:
 							e = self.driver.find_element_by_xpath('//div[@data-sigil="photo-image"]')
 						except:
-							print('can\'t find content url!')
+							print(f'can\'t find content url at {rul_mob_}!')
 
 					try:
 						# this data-store looks like a dictionary but it's a string
 						this_post['content_url'] = json.loads(e.get_attribute('data-store'))['src']
 					except:
-						pass
+						try:
+							this_post['content_url'] = json.loads(e.get_attribute('data-store'))['imgsrc']
+						except:
+							pass
 				except:
 					continue
 
-			dict_[p] = this_post
+			dict_[p].update(this_post)
 
 		self.new_posts = dict_
 
@@ -437,46 +447,61 @@ class Fbdown:
 		"""
 		update posts with the new ones and save to s JSON
 		"""
+
+		json.dump(self.new_posts, open(f'{self.post_dir}/new_posts.json','w'))
+
 		json.dump({**self.posts, **self.new_posts}, open(f'{self.post_dir}/posts.json','w'))
 
-		json.dump(self.posts, open(f'{self.post_archive_dir}/posts_{arrow.get(self.today).format("YYYYMMDD")}.json','w'))
+		if self.posts:
+			json.dump(self.posts, open(f'{self.post_archive_dir}/posts_{arrow.get(self.today).format("YYYYMMDD")}.json','w'))
 
 		return self
 
-	def get_content(self, id, url):
+	def get_content(self):
 
 		"""
-		download whatever the url points to; an example of a url we have:
-		https://scontent-syd2-1.xx.fbcdn.net/v/t1.0-0/p526x296/12241297_994655900599825_5991089523523548804_n.jpg?
-
-		https://video-syd2-1.xx.fbcdn.net/v/t42.1790-2/14099960_1136403553069791_825217156_n.mp4?_nc_cat=0&efg=eyJ2ZW5jb2RlX3RhZyI6InN2ZV9zZCJ9&oh=1d153c7c15f6de225227293d3d7926e2&oe=5B986C37
+		download photos or videos
 		"""
-		print('downloading ', url)
 
-		if not url:
-			return None
+		for _ in self.new_posts:
 
-		try:
-			ext_ = re.search(r'(?<=\.)[a-z4]+(?=\?)',url).group(0)
-		except:
-			print('couldn\'t find extension!')
-			return None
+			url_ = self.new_posts[_]['content_url']
 
-		if ext_ in self.extensions['video']:
-			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.video_dir, f'video_{id}.{ext_}'))
-		elif ext_ in self.extensions['picture']:
-			local_filename, headers = urllib.request.urlretrieve(url, os.path.join(self.picture_dir, f'picture_{id}.{ext_}'))
+			if not url_:
+				print(f'missing content url for post id {_}! skipping download...')
+				continue
+
+			try:
+				ext_ = re.search(r'(?<=\.)[a-z4]+(?=\?)', url_).group(0)
+			except:
+				print(f'couldn\'t find extension in {url_}!')
+				continue
+
+			if ext_ in self.extensions['video']:
+				p = os.path.join(self.video_dir, f'video_{_}.{ext_}')
+				print(f'downloading video to {p}...', end='')
+				local_filename, headers = urllib.request.urlretrieve(url_, p)
+				urllib.request.urlcleanup()
+				self.new_posts[_]['file'] = p
+				print('ok')
+			elif ext_ in self.extensions['picture']:
+				p = os.path.join(self.picture_dir, f'picture_{_}.{ext_}')
+				print(f'downloading video to {p}...', end='')
+				local_filename, headers = urllib.request.urlretrieve(url_, p)
+				urllib.request.urlcleanup()
+				self.new_posts[_]['file'] = p
+				print('ok')
 
 		return self
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', what='videos', year='2017') \
-					.get_post_ids(max_res=15, what='videos') \
-					.get_post_details().save() \
-					.search('timtamslam', what='photos', year='2017') \
-					.get_post_ids(max_res=15, what='photos') \
-					.get_post_details().save()
+	fbd = Fbdown().login().search('timtamslam', what='photos', year='2016') \
+					.get_post_ids(what='photos') \
+					.get_post_details().get_content().save() 
+					# .search('timtamslam', what='photos', year='2017') \
+					# .get_post_ids(max_res=15, what='photos') \
+					# .get_post_details().save()
 
 
 
