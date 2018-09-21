@@ -40,7 +40,7 @@ class Fbdown:
 		self.vidid_re = re.compile(r'(?<=videos\/)\d+(?=\/)')   # videos/1672853176066872/
 
 		self.reactions = 'like love haha wow sad angry'.split()
-		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png', 'gif']}
+		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png']}
 
 		self.video_dir = video_dir
 		self.picture_dir = picture_dir
@@ -49,6 +49,7 @@ class Fbdown:
 		self.creds_dir = creds_dir
 
 		if not os.path.exists(self.creds_dir):
+
 			self.driver.close()
 			raise Exception('can\'t find the credentials directory!')
 
@@ -57,10 +58,12 @@ class Fbdown:
 				os.mkdir(d)
 		try:
 			self.posts = json.load(open(os.path.join(self.post_dir, 'posts.json')))
-			print(f'found a post collection with {len(self.posts)} posts...')
+			print(f'found {len(self.posts)} posts...')
+			self.to_download = [{p: self.posts[p]} for p in self.posts if not self.posts[p].get('file', None)]
+			print(f'previously collected posts with missing files: {len(self.to_download)}')
 		except:
 			self.posts = defaultdict(lambda: defaultdict())
-			print('starting a new post collection...')
+			print('collecting a new JSON with posts...')
 
 		self.new_posts = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
@@ -164,12 +167,10 @@ class Fbdown:
 
 		return post_id
 
-	def get_post_ids(self, what='photos'):
+	def get_post_ids(self):
 		"""
 		after the search results have been displayed, collect all post ids not yet available
 		"""
-		if what not in 'photos videos'.split():
-			raise ValueError('get_post_ids needs parameter *what* to be either *photos* or *videos*!')
 
 		refs_ = set() 
 
@@ -195,16 +196,16 @@ class Fbdown:
 	
 			# collect urls from this block
 
-			if what == 'photos':
+			try:
 				ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
-			elif what == 'videos':
-				ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div[role="VIDEOS"]>div>div>a[aria-label*="Video"]')
-
-			if not ch_:
-				print (f'no photos or videos here! moving on...')
-				continue
-			else:
-				posts_per_block.append(len(ch_))
+			except:
+				try:
+					ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div[role="VIDEOS"]>div>div>a[aria-label*="Video"]')
+				except:
+					print (f'no photos or videos here! moving on...')
+					continue
+			
+			posts_per_block.append(len(ch_))
 	
 			refs_ |= {_.get_attribute('href') for _ in ch_}
 
@@ -291,6 +292,10 @@ class Fbdown:
 				except:
 					continue
 
+			# poster's category
+			this_post['category'] = self.get_poster()
+			self.driver.back()
+
 			# find content url, first for pictures
 			try:
 
@@ -309,7 +314,7 @@ class Fbdown:
 						e = self.driver.find_element_by_xpath('//div[@data-sigil="inlineVideo"]')
 					except:
 						try:
-							e = self.driver.find_element_by_xpath('//div[@data-sigil="photo-image"]')
+							e = self.driver.find_element_by_xpath('//*[@data-sigil="photo-image"]')
 						except:
 							print(f'can\'t find content url at {rul_mob_}!')
 
@@ -329,6 +334,41 @@ class Fbdown:
 		self.new_posts = dict_
 
 		return self
+
+	def get_poster(self):
+
+		"""
+		get poster's category if any; assume that you are on the post page
+		"""
+		
+		self.driver.find_elemenet_by_tag_name('body').send_keys(Keys.ESC)
+
+		ct = None
+
+		try:
+			WebDriverWait(self.driver, self.wait) \
+						.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#fbPhotoSnowliftAuthorName>a[data-hovercard]'))).click()
+		except:
+			print('couldn\'t click on poster\'s name!')
+			return ct
+
+		try:
+			WebDriverWait(self.driver, self.wait) \
+						.until(EC.element_to_be_clickable((By.XPATH, '//div[@data-key="tab_about"]'))) \
+							.click()
+		except:
+			# this is not a business
+			return ct
+
+		try:
+			ct = ' - '.join([w.strip().lower() for w in re.split(r'[^\w\s]', 
+										WebDriverWait(self.driver, self.wait) \
+										.until(EC.element_to_be_clickable((By.XPATH, '//u[text()="categories"]/../../following-sibling::div[@class]'))).text)])
+		except:
+			print('couldn\'t find categories on poster\'s page!')	
+
+		return ct
+
 
 	def search(self, tag, what='photos', month=None, year=None):
 		"""
@@ -496,12 +536,13 @@ class Fbdown:
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login().search('timtamslam', what='photos', year='2016') \
-					.get_post_ids(what='photos') \
-					.get_post_details().get_content().save() 
-					# .search('timtamslam', what='photos', year='2017') \
-					# .get_post_ids(max_res=15, what='photos') \
-					# .get_post_details().save()
+	fbd = Fbdown().login() \
+					.search('timtamslam', what='photos', year='2018') \
+					.get_post_ids() \
+					.get_post_details() \
+					.get_poster() \
+					.get_content().save() 
+
 
 
 
