@@ -292,9 +292,13 @@ class Fbdown:
 				except:
 					continue
 
-			# poster's category
-			this_post['category'] = self.get_poster()
-			self.driver.back()
+			# poster's url
+			try:
+
+				this_post['poster_url'] = WebDriverWait(self.driver, self.wait) \
+						.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#fbPhotoSnowliftAuthorName>a[data-hovercard]'))).get_attribute('href')
+			except:
+				print('no poster url..')
 
 			# find content url, first for pictures
 			try:
@@ -341,7 +345,7 @@ class Fbdown:
 		get poster's category if any; assume that you are on the post page
 		"""
 		
-		self.driver.find_elemenet_by_tag_name('body').send_keys(Keys.ESC)
+		# self.driver.find_elemenet_by_tag_name('body').send_keys(Keys.ESC)
 
 		ct = None
 
@@ -540,7 +544,6 @@ if __name__ == '__main__':
 					.search('timtamslam', what='photos', year='2018') \
 					.get_post_ids() \
 					.get_post_details() \
-					.get_poster() \
 					.get_content().save() 
 
 
