@@ -18,6 +18,11 @@ import arrow
 
 from collections import defaultdict
 
+import google.cloud.vision as gcv
+from google.oauth2 import service_account
+from google.protobuf.json_format import MessageToDict
+import langcodes
+
 class Fbdown:
 
 	def __init__(self, wait=30, post_dir='posts', post_archive_dir='archive', video_dir='videos',
@@ -41,6 +46,14 @@ class Fbdown:
 
 		self.reactions = 'like love haha wow sad angry'.split()
 		self.extensions = {'video': ['mp4'], 'picture': ['jpg', 'png']}
+
+		web_detection_params = gcv.types.WebDetectionParams(include_geo_results=True)
+		image_context = gcv.types.ImageContext(web_detection_params=web_detection_params)
+
+		self.face_feats = 'joy sorrow anger surprise under_exposed blurred headwear'.split()
+
+		# credentials must be loaded as below, otherwise there will be an error
+		client = gcv.ImageAnnotatorClient(credentials=service_account.Credentials.from_service_account_file('credentials/ArnottsAU-7991416de13b.json'))
 
 		self.video_dir = video_dir
 		self.picture_dir = picture_dir
@@ -537,6 +550,43 @@ class Fbdown:
 				print('ok')
 
 		return self
+
+	def annotate(self):
+		"""
+		using Google Vision API, annotate a photo
+		"""
+		f = open('pictures/picture_582887468579563.jpg', 'rb').read()
+
+		r = MessageToDict(client.annotate_image({'image': 
+                      			 {'content': f}, 'image_context': image_context}), 
+                  						preserving_proto_field_name = True)
+		annots = defaultdict(lambda: defaultdict())
+
+		"""
+		faces
+
+		create a dictionary like this: {'faces': {'count': 2, 'face_1': {joy: very_unlikely, sorrow: very_unlikely, 
+																anger: very_unlikely}}}
+		"""
+
+		faces = 0
+
+		try:
+			faces = int(r.get(f'face_annotations', None))
+		except:
+			print('no faces')
+
+		annots['faces']['count'] = faces
+
+		if faces:
+			for i, face in enumerate(faces, 1):
+				annots['faces']['face_' + str(i)] = {face_feat: r["face_annotations"][i].get((face_feat + "_likelihood").lower(), None) 
+						for face_feat in self.face_feats}
+
+
+		
+
+
 
 if __name__ == '__main__':
 
