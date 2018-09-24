@@ -580,8 +580,15 @@ class Fbdown:
 		annots['faces']['count'] = _count('face')
 
 		for i, face in enumerate(range(annots['faces']['count'])):
-			annots['faces']['face_' + str(i + 1)] = {face_feat: r["face_annotations"][i].get((face_feat + "_likelihood").lower(), None) 
-				for face_feat in self.face_feats}
+        
+        	this_face_ = []
+        	for feature in r['face_annotations'][i]:
+        	    if '_likelihood' in feature:
+        	        if r['face_annotations'][i][feature].lower() in 'likely very_likely'.split():
+        	            this_face_.append(feature.replace('_likelihood',''))
+	
+        	if this_face_:
+        	    annots['faces']['face_' + str(i + 1)]
 
 		"""
 		logos
@@ -590,7 +597,8 @@ class Fbdown:
 
 		annots['logos']['count'] = _count('logo')
 
-		annots['logos']['descriptions'] = [r['logo_annotations'][i]['description'].lower() 
+		if annots['logos']['count']:
+			annots['logos']['descriptions'] = [r['logo_annotations'][i]['description'].lower() 
 												for i, logo in enumerate(range(annots['logos']['count']))]
 
 
@@ -601,14 +609,25 @@ class Fbdown:
 		"""
 
 		annots['labels']['count'] = _count('label')
-
-		annots['labels'] = {l['description']: l['score'] for l in r['label_annotations']}
-
-		"""
-		themes
+		if annots['labels']['count']:
+			annots['labels'] = {l['description']: round(l['score'], 3) for l in r['label_annotations']}
 
 		"""
-		annots['restricted_themes'] = {theme: likelihood.lower() for theme, likelihood in r['safe_search_annotation'].items()}
+		themes; likelihoods can be one of the following:
+
+		LIKELIHOOD_UNSPECIFIED
+		VERY_UNLIKELY
+		UNLIKELY	
+		POSSIBLE	
+		LIKELY
+		VERY_LIKELY	
+
+		"""
+		detected_themes = [theme for theme, likelihood in r['safe_search_annotation'].items() 
+													if likelihood.lower() in 'likely very_likely'.split()] 
+
+		if detected_themes:
+			annots['restricted_themes'] = detected_themes
 
 		"""
 		colors
@@ -637,6 +656,40 @@ class Fbdown:
     		clrs[color]['score'] = round(c['score'], 3)
 
     	annots['colors'] = clrs
+
+    	"""
+    	full text annotation
+
+    	"""
+
+    	# note that detected languages look like [{'language_code': 'ceb', 'confidence': 1.0}]
+    	try:
+    		annots['languages'] = sorted([(l['language_code'], l['confidence']) 
+    			for p in r['full_text_annotation']['pages'] for l in p['property']['detected_languages']], 
+    			key=lambda x: x[1], reversed=True)
+    	except:
+    		pass
+
+    	"""
+    	web detection
+
+    	"""
+    	try:
+    		annots['web_entities'] = {e['description'].lower(): round(e['score'], 3) 
+    					for e in r['web_detection']['web_entities'] if 'description' in e}
+    	except:
+    		pass
+
+    	"""
+		localized objects
+
+    	"""
+    	try:
+    		annots['objects'] = {o['name'].lower(): round(o['score'], 3) for o in r['localized_object_annotations']}
+    	except:
+    		pass
+
+    	return annots
 
 
 if __name__ == '__main__':
