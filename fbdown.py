@@ -16,7 +16,7 @@ import urllib.request
 
 import arrow
 
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import google.cloud.vision as gcv
 from google.oauth2 import service_account
@@ -192,8 +192,9 @@ class Fbdown:
 
 		posts_per_block = []
 
-		hight_ = self.driver.execute_script("return document.body.scrollHeight")
-		heights_.append(hight_)
+		errors = []
+
+		heights_.append(self.driver.execute_script("return document.body.scrollHeight"))
 
 		for n, blc_id in enumerate(self.block_generator()):
 			
@@ -203,23 +204,29 @@ class Fbdown:
 				blc = WebDriverWait(self.driver, self.wait) \
 										.until(EC.visibility_of_element_located((By.ID, blc_id)))
 			except:
-				print(f'can\'t find block {blc_id}!')
+				print(f'can\'t find block {blc_id}! trying next one...')
 				continue
 	
 			# collect urls from this block
-
 			try:
 				ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div:not([style])>a[href*="photo"][rel="theater"]')
 			except:
 				try:
 					ch_ = self.driver.find_elements_by_css_selector(f'#{blc_id} div[role="VIDEOS"]>div>div>a[aria-label*="Video"]')
 				except:
-					print (f'no photos or videos here! moving on...')
+					print (f'no photos or videos! moving to next block...')
 					continue
 			
-			posts_per_block.append(len(ch_))
-	
-			refs_ |= {_.get_attribute('href') for _ in ch_}
+			urls_ = [_.get_attribute('href') for _ in ch_]
+
+			duplicate_urls = {url: count for url, count in Counter(urls_).items() if count > 1}
+
+			if duplicate_urls:
+				print(f'found {len(duplicate_urls)} duplicate urls!')
+			else:
+				print(f'all collected urls are unique...')
+
+			refs_ |= set(urls_)
 
 			self._scroll_and_wait(n=1, s=6)
 			
@@ -229,16 +236,14 @@ class Fbdown:
 				print(f'done scrolling...')
 				break
 	
-		# parse collected urls to extract post IDs; note we now have urls for all blocks
-
-		print(f'expected posts: {sum(posts_per_block)}')
-
+		# parse collected urls to extract post IDs
 		for post_url in list(refs_):
 			post_id = self._get_post_id(post_url)
 			if post_id not in self.posts:
+				# if we started from an empty self.new_posts, if should become {POSTID: {'post_url'}: 'URL1'}, ...}
 				self.new_posts[post_id]['post_url'] = post_url
 
-		print(f'collected {len(self.new_posts)} new posts')
+		print(f'{len(self.new_posts)} posts not yet collected...')
 
 		return self
 
@@ -251,20 +256,21 @@ class Fbdown:
 
 		dict_ = copy.copy(self.new_posts)
 
-		for i, p in enumerate(dict_, 1):
+		for i, p in enumerate(self.new_posts, 1):
 
 			print(f'processing post {i}...')
 
 			# dictionary to collect post info; attach it to the post ID key
 			this_post = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
-			url_ = dict_[p]['post_url']
+			url_ = self.new_posts[p]['post_url']
 
 			while True:
 				try:
 					self.driver.get(url_)
 					break
 				except:
+					print(f'couldn\'t get URL {url_}, refreshing page...')
 					self.driver.refresh()
 
 			# get when posted
@@ -296,16 +302,17 @@ class Fbdown:
 				try:
 					aria_tx_ = _.get_attribute('aria-label').lower().strip()
 					
-					for m in self.reactions:
-						m_line = re.search(r'\d+\s+(?=' + f'{m})', aria_tx_)
+					for reaction_ in self.reactions:
+
+						m_line = re.search(r'\d+\s+(?=' + f'{reaction_})', aria_tx_)
+
 						if m_line:
-							this_post['metrics'][self.today][m + 's'] = int(m_line.group(0))
+							this_post['metrics'][self.today][reaction_ + 's'] = int(m_line.group(0))
 				except:
 					continue
 
 			# poster's url
 			try:
-
 				this_post['poster_url'] = WebDriverWait(self.driver, self.wait) \
 						.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#fbPhotoSnowliftAuthorName>a[data-hovercard]'))).get_attribute('href').split('?')[0]
 			except:
@@ -313,16 +320,15 @@ class Fbdown:
 
 			# find content url, first for pictures
 			try:
-
 				this_post['content_url'] = WebDriverWait(self.driver, self.wait) \
 												.until(EC.element_to_be_clickable((By.XPATH, '//img[@class="spotlight"][@alt][@src]'))) \
 												.get_attribute('src')
 			except:
-				print('now searching for video or special image content url..')
+				print('no content url for image. now searching for special content urls..')
 				try:
 					# need to visit the mobile version of the post
 					rul_mob_ = dict_[p]['post_url'].replace('www', 'm')
-
+					print('loading mobile version of this page...')
 					self.driver.get(rul_mob_)
 
 					try:
@@ -332,19 +338,19 @@ class Fbdown:
 							e = self.driver.find_element_by_xpath('//*[@data-sigil="photo-image"]')
 						except:
 							print(f'can\'t find content url at {rul_mob_}!')
-
-					try:
-						# this data-store looks like a dictionary but it's a string
-						this_post['content_url'] = json.loads(e.get_attribute('data-store'))['src']
-					except:
-						try:
-							this_post['content_url'] = json.loads(e.get_attribute('data-store'))['imgsrc']
-						except:
-							pass
+							try:
+								# this data-store looks like a dictionary but it's a string
+								this_post['content_url'] = json.loads(e.get_attribute('data-store'))['src']
+							except:
+								try:
+									this_post['content_url'] = json.loads(e.get_attribute('data-store'))['imgsrc']
+								except:
+									pass
 				except:
 					continue
-
-			dict_[p].update(this_post)
+			
+			if this_post:
+				dict_[p] = this_post
 
 		self.new_posts = dict_
 
@@ -384,35 +390,27 @@ class Fbdown:
 				WebDriverWait(self.driver, 6) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//div[@data-key="tab_about"]'))) \
 								.click()
+				try:
+					categs[p]['poster_category'] = ' - '.join([w.strip().lower() for w in re.split(r'[^\w\s]', 
+											WebDriverWait(self.driver, self.wait) \
+											.until(EC.element_to_be_clickable((By.XPATH, '//u[text()="categories"]/../../following-sibling::div[@class]'))).text)])
+				except:
+					categs[p]['poster_category'] = 'business'
+
 			except:
 				# this is not a business
 				categs[p]['poster_category'] = 'private'
-				continue
 
-			try:
-				intro_ = WebDriverWait(self.driver, 6) \
-							.until(EC.presence_of_element_located((By.ID, 'intro_container_id')))
-				print('found intro..')
-				print(intro_.text)
-			except:
-				pass
+				try:
+					intro_ = WebDriverWait(self.driver, 6) \
+								.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div#intro_container_id')))
+					print('found intro..')
+					print(intro_.text)
+				except:
+					pass		
 
-			try:
-				categs[p]['poster_category'] = ' - '.join([w.strip().lower() for w in re.split(r'[^\w\s]', 
-											WebDriverWait(self.driver, self.wait) \
-											.until(EC.element_to_be_clickable((By.XPATH, '//u[text()="categories"]/../../following-sibling::div[@class]'))).text)])
-			except:
-				pass
-
-		dik = defaultdict(lambda: defaultdict())
-
-		for _ in self.new_posts:
-			if _ in categs:
-				dik[_] = {_: {**self.new_posts[_], **categs[_]}}
-			else:
-				dik[_] = self.new_posts[_]
-
-		self.new_posts = dik
+		for post_id in categs:
+			self.new_posts[post_id]['poster_category'] = categs[post_id]['poster_category']
 
 		return self
 
