@@ -221,7 +221,7 @@ class Fbdown:
 	
 			refs_ |= {_.get_attribute('href') for _ in ch_}
 
-			self._scroll_and_wait(n=2)
+			self._scroll_and_wait(n=1, s=6)
 			
 			heights_.append(self.driver.execute_script("return document.body.scrollHeight"))
 
@@ -279,7 +279,7 @@ class Fbdown:
 				continue
 
 			# get comments, shares and reactions
-			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@data-hover="tooltip"]'):
+			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-live="polite"]'):
 	
 				# search for comments or shares, they may sit in text
 				tx_ = _.text.lower()
@@ -290,6 +290,7 @@ class Fbdown:
 							this_post['metrics'][self.today][m] = int(re.search(r'\d+\s+(?=' + f'{m})', tx_).group(0))
 						except:
 							pass
+
 			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-label]'):
 				
 				try:
@@ -306,7 +307,7 @@ class Fbdown:
 			try:
 
 				this_post['poster_url'] = WebDriverWait(self.driver, self.wait) \
-						.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#fbPhotoSnowliftAuthorName>a[data-hovercard]'))).get_attribute('href')
+						.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#fbPhotoSnowliftAuthorName>a[data-hovercard]'))).get_attribute('href').split('?')[0]
 			except:
 				print('no poster url..')
 
@@ -354,34 +355,66 @@ class Fbdown:
 		"""
 		get poster's category if any; assume that you are on the post page
 		"""
-		
-		self.driver.find_element_by_tag_name('body').send_keys(Keys.ESC)
 
-		ct = None
+		categs = defaultdict(lambda: defaultdict())
 
-		try:
-			WebDriverWait(self.driver, self.wait) \
-						.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '#fbPhotoSnowliftAuthorName>a[data-hovercard]'))).click()
-		except:
-			print('couldn\'t click on poster\'s name!')
-			return ct
+		for p in self.new_posts:
 
-		try:
-			WebDriverWait(self.driver, self.wait) \
-						.until(EC.element_to_be_clickable((By.XPATH, '//div[@data-key="tab_about"]'))) \
-							.click()
-		except:
-			# this is not a business
-			return ct
+			url_ = self.new_posts[p].get('poster_url', None)
 
-		try:
-			ct = ' - '.join([w.strip().lower() for w in re.split(r'[^\w\s]', 
-										WebDriverWait(self.driver, self.wait) \
-										.until(EC.element_to_be_clickable((By.XPATH, '//u[text()="categories"]/../../following-sibling::div[@class]'))).text)])
-		except:
-			print('couldn\'t find categories on poster\'s page!')	
+			if not url_:
+				continue
 
-		return ct
+			while True:
+				try:
+					self.driver.get(url_)
+					break
+				except:
+					pass
+
+			try:
+				WebDriverWait(self.driver, 6) \
+							.until(EC.element_to_be_clickable((By.XPATH, '//a[@aria-label="Press Esc to close"]'))) \
+								.click()
+			except:
+				pass
+
+
+			try:
+				WebDriverWait(self.driver, 6) \
+							.until(EC.element_to_be_clickable((By.XPATH, '//div[@data-key="tab_about"]'))) \
+								.click()
+			except:
+				# this is not a business
+				categs[p]['poster_category'] = 'private'
+				continue
+
+			try:
+				intro_ = WebDriverWait(self.driver, 6) \
+							.until(EC.presence_of_element_located((By.ID, 'intro_container_id')))
+				print('found intro..')
+				print(intro_.text)
+			except:
+				pass
+
+			try:
+				categs[p]['poster_category'] = ' - '.join([w.strip().lower() for w in re.split(r'[^\w\s]', 
+											WebDriverWait(self.driver, self.wait) \
+											.until(EC.element_to_be_clickable((By.XPATH, '//u[text()="categories"]/../../following-sibling::div[@class]'))).text)])
+			except:
+				pass
+
+		dik = defaultdict(lambda: defaultdict())
+
+		for _ in self.new_posts:
+			if _ in categs:
+				dik[_] = {_: {**self.new_posts[_], **categs[_]}}
+			else:
+				dik[_] = self.new_posts[_]
+
+		self.new_posts = dik
+
+		return self
 
 
 	def search(self, tag, what='photos', month=None, year=None):
@@ -519,9 +552,9 @@ class Fbdown:
 
 		for _ in self.new_posts:
 
-			url_ = self.new_posts[_]['content_url']
-
-			if not url_:
+			try:
+				url_ = self.new_posts[_]['content_url']
+			except:
 				print(f'missing content url for post id {_}! skipping download...')
 				continue
 
@@ -692,9 +725,10 @@ class Fbdown:
 if __name__ == '__main__':
 
 	fbd = Fbdown().login() \
-					.search('timtamslam', what='photos', year='2016') \
+					.search('timtamslam', what='photos', year='2018') \
 					.get_post_ids() \
 					.get_post_details() \
+					.get_poster() \
 					.get_content().save() 
 
 
