@@ -28,6 +28,12 @@ class Fbdown:
 	def __init__(self, wait=30, post_dir='posts', post_archive_dir='archive', video_dir='videos',
 				 picture_dir='pictures', creds_dir='credentials'):
 
+		self.video_dir = video_dir
+		self.picture_dir = picture_dir
+		self.post_dir = post_dir
+		self.post_archive_dir = post_archive_dir
+		self.creds_dir = creds_dir
+
 		self.wait = wait
 
 		self.today = arrow.utcnow().to('Australia/Sydney').format('YYYY-MM-DD')
@@ -53,13 +59,8 @@ class Fbdown:
 		self.face_feats = 'joy sorrow anger surprise under_exposed blurred headwear'.split()
 
 		# credentials must be loaded as below, otherwise there will be an error
-		client = gcv.ImageAnnotatorClient(credentials=service_account.Credentials.from_service_account_file('credentials/ArnottsAU-7991416de13b.json'))
-
-		self.video_dir = video_dir
-		self.picture_dir = picture_dir
-		self.post_dir = post_dir
-		self.post_archive_dir = post_archive_dir
-		self.creds_dir = creds_dir
+		client = gcv.ImageAnnotatorClient(credentials=service_account.Credentials \
+								.from_service_account_file(f'{self.creds_dir}/ArnottsAU-7991416de13b.json'))
 
 		if not os.path.exists(self.creds_dir):
 
@@ -191,8 +192,6 @@ class Fbdown:
 
 		posts_per_block = []
 
-		is_last_page = reached_max = False
-
 		hight_ = self.driver.execute_script("return document.body.scrollHeight")
 		heights_.append(hight_)
 
@@ -222,24 +221,15 @@ class Fbdown:
 	
 			refs_ |= {_.get_attribute('href') for _ in ch_}
 
-			self._scroll_and_wait(n=1)
+			self._scroll_and_wait(n=2)
 			
 			heights_.append(self.driver.execute_script("return document.body.scrollHeight"))
-	
-			is_last_page = (heights_[-3:].count(heights_[-1]) == 3)
 
-			# reached_max = (len(refs_) >= max_res)
-	
-			# if reached_max:
-			# 	print(f'collected {len(refs_)} posts, more than requested max {max_res}; last searched block id: {blc_id}')
-			# 	break
-
-			if is_last_page:
-				print(f'apparently, nowhere to scroll. last 3 page heights: {", ".join([str(h) for h in heights_[-3:]])}')
+			if (heights_[-3:].count(heights_[-1]) == 3):
+				print(f'done scrolling...')
 				break
 	
 		# parse collected urls to extract post IDs; note we now have urls for all blocks
-		print('filtering post ids...')
 
 		print(f'expected posts: {sum(posts_per_block)}')
 
@@ -261,14 +251,21 @@ class Fbdown:
 
 		dict_ = copy.copy(self.new_posts)
 
-		for p in dict_:
+		for i, p in enumerate(dict_, 1):
 
-			url_ = dict_[p]['post_url']
-
-			self.driver.get(url_)
+			print(f'processing post {i}...')
 
 			# dictionary to collect post info; attach it to the post ID key
 			this_post = defaultdict(lambda: defaultdict(lambda: defaultdict()))
+
+			url_ = dict_[p]['post_url']
+
+			while True:
+				try:
+					self.driver.get(url_)
+					break
+				except:
+					self.driver.refresh()
 
 			# get when posted
 			try:
@@ -278,7 +275,7 @@ class Fbdown:
 										.format('YYYY-MM-DD')
 			except:
 				# if a post has no timestamp, it's useless
-				print('WARNING: found a post without a timestamp! skipping..')
+				print('found a post without a timestamp! skipping..')
 				continue
 
 			# get comments, shares and reactions
@@ -358,7 +355,7 @@ class Fbdown:
 		get poster's category if any; assume that you are on the post page
 		"""
 		
-		# self.driver.find_elemenet_by_tag_name('body').send_keys(Keys.ESC)
+		self.driver.find_element_by_tag_name('body').send_keys(Keys.ESC)
 
 		ct = None
 
@@ -558,8 +555,8 @@ class Fbdown:
 		f = open('pictures/picture_582887468579563.jpg', 'rb').read()
 
 		r = MessageToDict(client.annotate_image({'image': 
-                      			 {'content': f}, 'image_context': image_context}), 
-                  						preserving_proto_field_name = True)
+								 {'content': f}, 'image_context': image_context}), 
+										preserving_proto_field_name = True)
 		annots = defaultdict(lambda: defaultdict())
 
 		"""
@@ -580,15 +577,15 @@ class Fbdown:
 		annots['faces']['count'] = _count('face')
 
 		for i, face in enumerate(range(annots['faces']['count'])):
-        
-        	this_face_ = []
-        	for feature in r['face_annotations'][i]:
-        	    if '_likelihood' in feature:
-        	        if r['face_annotations'][i][feature].lower() in 'likely very_likely'.split():
-        	            this_face_.append(feature.replace('_likelihood',''))
+			
+			this_face_ = []
+			for feature in r['face_annotations'][i]:
+				if '_likelihood' in feature:
+					if r['face_annotations'][i][feature].lower() in 'likely very_likely'.split():
+						this_face_.append(feature.replace('_likelihood',''))
 	
-        	if this_face_:
-        	    annots['faces']['face_' + str(i + 1)]
+			if this_face_:
+				annots['faces']['face_' + str(i + 1)]
 
 		"""
 		logos
@@ -635,67 +632,67 @@ class Fbdown:
 		"""
 
 		def _get_closest_color(color):
-    
-    		distance_to_color = []
-    
-    		for k, v in webcolors.css3_hex_to_names.items():
-        
-        		# going through something like this: {#f0f8ff: aliceblue, #faebd7: antiquewhite}
-        		r,g,b = webcolors.hex_to_rgb(k)  # this converts #f0f8ff to integer RGB values
-        	
-        		distance_to_color.append((v, (r - color[0])**2 + (g - color[1])**2 + (b - color[2])**2))
-        
-    		return min(distance_to_color, key=lambda x: x[1])[0]
+	
+			distance_to_color = []
+	
+			for k, v in webcolors.css3_hex_to_names.items():
+		
+				# going through something like this: {#f0f8ff: aliceblue, #faebd7: antiquewhite}
+				r,g,b = webcolors.hex_to_rgb(k)  # this converts #f0f8ff to integer RGB values
+			
+				distance_to_color.append((v, (r - color[0])**2 + (g - color[1])**2 + (b - color[2])**2))
+		
+			return min(distance_to_color, key=lambda x: x[1])[0]
 
-    	clrs = defaultdict(lambda: defaultdict())
+		clrs = defaultdict(lambda: defaultdict())
 
 		for c in r['image_properties_annotation']['dominant_colors']['colors']:
 			# create an RGB tuple and get the closest color from CCS3 palette
-    		color = _get_closest_color(tuple([int(c) for c in (c['color']['red'], c['color']['green'], c['color']['blue'])]))
-    		clrs[color]['pixel_fraction'] = round(c['pixel_fraction'], 3)
-    		clrs[color]['score'] = round(c['score'], 3)
+			color = _get_closest_color(tuple([int(c) for c in (c['color']['red'], c['color']['green'], c['color']['blue'])]))
+			clrs[color]['pixel_fraction'] = round(c['pixel_fraction'], 3)
+			clrs[color]['score'] = round(c['score'], 3)
 
-    	annots['colors'] = clrs
+		annots['colors'] = clrs
 
-    	"""
-    	full text annotation
+		"""
+		full text annotation
 
-    	"""
+		"""
 
-    	# note that detected languages look like [{'language_code': 'ceb', 'confidence': 1.0}]
-    	try:
-    		annots['languages'] = sorted([(l['language_code'], l['confidence']) 
-    			for p in r['full_text_annotation']['pages'] for l in p['property']['detected_languages']], 
-    			key=lambda x: x[1], reversed=True)
-    	except:
-    		pass
+		# note that detected languages look like [{'language_code': 'ceb', 'confidence': 1.0}]
+		try:
+			annots['languages'] = sorted([(l['language_code'], l['confidence']) 
+				for p in r['full_text_annotation']['pages'] for l in p['property']['detected_languages']], 
+				key=lambda x: x[1], reversed=True)
+		except:
+			pass
 
-    	"""
-    	web detection
+		"""
+		web detection
 
-    	"""
-    	try:
-    		annots['web_entities'] = {e['description'].lower(): round(e['score'], 3) 
-    					for e in r['web_detection']['web_entities'] if 'description' in e}
-    	except:
-    		pass
+		"""
+		try:
+			annots['web_entities'] = {e['description'].lower(): round(e['score'], 3) 
+						for e in r['web_detection']['web_entities'] if 'description' in e}
+		except:
+			pass
 
-    	"""
+		"""
 		localized objects
 
-    	"""
-    	try:
-    		annots['objects'] = {o['name'].lower(): round(o['score'], 3) for o in r['localized_object_annotations']}
-    	except:
-    		pass
+		"""
+		try:
+			annots['objects'] = {o['name'].lower(): round(o['score'], 3) for o in r['localized_object_annotations']}
+		except:
+			pass
 
-    	return annots
+		return annots
 
 
 if __name__ == '__main__':
 
 	fbd = Fbdown().login() \
-					.search('timtamslam', what='photos', year='2018') \
+					.search('timtamslam', what='photos', year='2016') \
 					.get_post_ids() \
 					.get_post_details() \
 					.get_content().save() 
