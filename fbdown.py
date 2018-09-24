@@ -569,23 +569,74 @@ class Fbdown:
 																anger: very_unlikely}}}
 		"""
 
-		faces = 0
+		def _count(what):
 
-		try:
-			faces = int(r.get(f'face_annotations', None))
-		except:
-			print('no faces')
-
-		annots['faces']['count'] = faces
-
-		if faces:
-			for i, face in enumerate(faces, 1):
-				annots['faces']['face_' + str(i)] = {face_feat: r["face_annotations"][i].get((face_feat + "_likelihood").lower(), None) 
-						for face_feat in self.face_feats}
+			try:
+				return int(bool(r.get(f'{what}_annotations', None)))
+			except:
+				print(f'no {what}s')
 
 
-		
+		annots['faces']['count'] = _count('face')
 
+		for i, face in enumerate(range(annots['faces']['count'])):
+			annots['faces']['face_' + str(i + 1)] = {face_feat: r["face_annotations"][i].get((face_feat + "_likelihood").lower(), None) 
+				for face_feat in self.face_feats}
+
+		"""
+		logos
+
+		"""	
+
+		annots['logos']['count'] = _count('logo')
+
+		annots['logos']['descriptions'] = [r['logo_annotations'][i]['description'].lower() 
+												for i, logo in enumerate(range(annots['logos']['count']))]
+
+
+		"""
+		labels
+
+		these are various labels the API decided to produce, could be anything
+		"""
+
+		annots['labels']['count'] = _count('label')
+
+		annots['labels'] = {l['description']: l['score'] for l in r['label_annotations']}
+
+		"""
+		themes
+
+		"""
+		annots['restricted_themes'] = {theme: likelihood.lower() for theme, likelihood in r['safe_search_annotation'].items()}
+
+		"""
+		colors
+
+		"""
+
+		def _get_closest_color(color):
+    
+    		distance_to_color = []
+    
+    		for k, v in webcolors.css3_hex_to_names.items():
+        
+        		# going through something like this: {#f0f8ff: aliceblue, #faebd7: antiquewhite}
+        		r,g,b = webcolors.hex_to_rgb(k)  # this converts #f0f8ff to integer RGB values
+        	
+        		distance_to_color.append((v, (r - color[0])**2 + (g - color[1])**2 + (b - color[2])**2))
+        
+    		return min(distance_to_color, key=lambda x: x[1])[0]
+
+    	clrs = defaultdict(lambda: defaultdict())
+
+		for c in r['image_properties_annotation']['dominant_colors']['colors']:
+			# create an RGB tuple and get the closest color from CCS3 palette
+    		color = _get_closest_color(tuple([int(c) for c in (c['color']['red'], c['color']['green'], c['color']['blue'])]))
+    		clrs[color]['pixel_fraction'] = round(c['pixel_fraction'], 3)
+    		clrs[color]['score'] = round(c['score'], 3)
+
+    	annots['colors'] = clrs
 
 
 if __name__ == '__main__':
