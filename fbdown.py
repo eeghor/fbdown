@@ -121,10 +121,9 @@ class Fbdown:
 			btn_.click()
 
 			# wait until the Fundraisers option (presumably, the last on the list of options) on the left panel 
-			# becomes clickable
-
+			# becomes clickable; sometimes it's Events so try that one too
 			try:
-				WebDriverWait(self.driver, self.wait).until(EC.element_to_be_clickable((By.XPATH, '//a[@title="Fundraisers"]')))
+				WebDriverWait(self.driver, self.wait).until(EC.element_to_be_clickable((By.XPATH, f'//a[@data-testid="left_nav_item_Events"]')))
 			except:
 				raise Exception('page after login has been loading too slow...')
 
@@ -204,6 +203,8 @@ class Fbdown:
 			except:
 				print(f'can\'t find block {blc_id}! trying next one...')
 				continue
+
+			time.sleep(random.randint(2,5))
 	
 			# collect urls from this block
 			try:
@@ -258,7 +259,7 @@ class Fbdown:
 
 		for url_ in post_url_list:
 
-			time.sleep(random.randint(0,5))
+			time.sleep(random.randint(2,5))
 
 			while True:
 				try:
@@ -451,13 +452,18 @@ class Fbdown:
 
 			print(f'poster {i}/{len(unique_posters)}...')
 
-			while True:
+			time.sleep(random.randint(3,10))
+
+			nrefr = 0
+
+			while nrefr < 3:
 				try:
 					self.driver.get(url_)
 					break
 				except:
 					print(f'couldn\'t get URL {url_}, refreshing page...')
 					self.driver.refresh()
+					nrefr += 1
 
 			# try to shut down the annoying popup
 			try:
