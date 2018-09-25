@@ -9,6 +9,7 @@ import json
 import re
 import os
 import copy 
+import random
 
 import itertools
 
@@ -71,10 +72,11 @@ class Fbdown:
 			if not os.path.exists(d):
 				os.mkdir(d)
 		try:
-			self.posts = json.load(open(os.path.join(self.post_dir, 'posts.json')))
-			print(f'found {len(self.posts)} posts...')
-			self.to_download = [{p: self.posts[p]} for p in self.posts if not self.posts[p].get('file', None)]
-			print(f'previously collected posts with missing files: {len(self.to_download)}')
+			_ = json.load(open(os.path.join(self.post_dir, 'posts.json')))
+
+			self.posts = {post_id: _[post_id] for post_id in _ if _[post_id].get('file', None) and _[post_id].get('content_url', None)}
+
+			print(f'found {len(self.posts)} complete posts...')
 		except:
 			self.posts = defaultdict(lambda: defaultdict())
 			print('collecting a new JSON with posts...')
@@ -190,10 +192,6 @@ class Fbdown:
 
 		heights_ = []
 
-		posts_per_block = []
-
-		errors = []
-
 		heights_.append(self.driver.execute_script("return document.body.scrollHeight"))
 
 		for n, blc_id in enumerate(self.block_generator()):
@@ -224,7 +222,7 @@ class Fbdown:
 			if duplicate_urls:
 				print(f'found {len(duplicate_urls)} duplicate urls!')
 			else:
-				print(f'all collected urls are unique...')
+				pass
 
 			refs_ |= set(urls_)
 
@@ -243,9 +241,63 @@ class Fbdown:
 				# if we started from an empty self.new_posts, if should become {POSTID: {'post_url'}: 'URL1'}, ...}
 				self.new_posts[post_id]['post_url'] = post_url
 
-		print(f'{len(self.new_posts)} posts not yet collected...')
+		print(f'found {len(self.new_posts)} posts not yet collected...')
 
 		return self
+
+	def _get_metrics(self, post_url_list):
+		"""
+		return {'post_url': {'metrics': {'date': {'likes': 3, 'wows': 2}}}}
+		"""
+
+		if not post_url_list:
+			print('post url list is empty!')
+			return None
+
+		ms = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: defaultdict())))
+
+		for url_ in post_url_list:
+
+			time.sleep(random.randint(0,5))
+
+			while True:
+				try:
+					self.driver.get(url_)
+					break
+				except:
+					print(f'couldn\'t get URL {url_}, refreshing page...')
+					self.driver.refresh()
+					time.sleep(4)
+
+			# get comments, shares and reactions
+			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-live="polite"]'):
+	
+				# search for comments or shares, they may sit in text
+				tx_ = _.text.lower()
+	
+				if tx_:
+					for m in ['comments', 'shares']:
+						try:
+							ms[url_]['metrics'][self.today][m] = int(re.search(r'\d+\s+(?=' + f'{m})', tx_).group(0))
+						except:
+							pass
+
+			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-label]'):
+				
+				try:
+					aria_tx_ = _.get_attribute('aria-label').lower().strip()
+					
+					for reaction_ in self.reactions:
+
+						m_line = re.search(r'\d+\s+(?=' + f'{reaction_})', aria_tx_)
+
+						if m_line:
+							ms[url_]['metrics'][self.today][reaction_ + 's'] = int(m_line.group(0))
+				except:
+					continue
+
+		return ms
+	
 
 	def get_post_details(self):
 
@@ -284,32 +336,32 @@ class Fbdown:
 				print('found a post without a timestamp! skipping..')
 				continue
 
-			# get comments, shares and reactions
-			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-live="polite"]'):
+			# # get comments, shares and reactions
+			# for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-live="polite"]'):
 	
-				# search for comments or shares, they may sit in text
-				tx_ = _.text.lower()
+			# 	# search for comments or shares, they may sit in text
+			# 	tx_ = _.text.lower()
 	
-				if tx_:
-					for m in ['comments', 'shares']:
-						try:
-							this_post['metrics'][self.today][m] = int(re.search(r'\d+\s+(?=' + f'{m})', tx_).group(0))
-						except:
-							pass
+			# 	if tx_:
+			# 		for m in ['comments', 'shares']:
+			# 			try:
+			# 				this_post['metrics'][self.today][m] = int(re.search(r'\d+\s+(?=' + f'{m})', tx_).group(0))
+			# 			except:
+			# 				pass
 
-			for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-label]'):
+			# for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-label]'):
 				
-				try:
-					aria_tx_ = _.get_attribute('aria-label').lower().strip()
+			# 	try:
+			# 		aria_tx_ = _.get_attribute('aria-label').lower().strip()
 					
-					for reaction_ in self.reactions:
+			# 		for reaction_ in self.reactions:
 
-						m_line = re.search(r'\d+\s+(?=' + f'{reaction_})', aria_tx_)
+			# 			m_line = re.search(r'\d+\s+(?=' + f'{reaction_})', aria_tx_)
 
-						if m_line:
-							this_post['metrics'][self.today][reaction_ + 's'] = int(m_line.group(0))
-				except:
-					continue
+			# 			if m_line:
+			# 				this_post['metrics'][self.today][reaction_ + 's'] = int(m_line.group(0))
+			# 	except:
+			# 		continue
 
 			# poster's url
 			try:
@@ -356,28 +408,58 @@ class Fbdown:
 
 		return self
 
+	def update_metrics(self):
+
+		print('updating new post metrics...')
+		post_urls = {self.new_posts[post_id]['post_url'] for post_id in self.new_posts}
+		print(f'total post urls: {len(post_urls)}')
+
+		if not post_urls:
+			raise Exception('no post urls in new posts!!')
+
+		new_posts_metrics = self._get_metrics(post_urls)
+
+		print(new_posts_metrics)
+		
+		for post_url in new_posts_metrics:
+			for post_id in self.new_posts:
+				if self.new_posts[post_id]['post_url'] == post_url:
+					self.new_posts[post_id]['metrics'].update(new_posts_metrics[post_url]['metrics'])
+
+		return self
+
 	def get_poster(self):
 
 		"""
 		get poster's category if any; assume that you are on the post page
 		"""
 
+		if not self.new_posts:
+			return self
+
 		categs = defaultdict(lambda: defaultdict())
 
-		for p in self.new_posts:
+		# since there may be multiple posts by the same poster
+		# we are looking at the unique poster_urls only
 
-			url_ = self.new_posts[p].get('poster_url', None)
+		unique_posters = list({poster_url for poster_url in {self.new_posts[p].get('poster_url', None) 
+								for p in self.new_posts} if poster_url})
 
-			if not url_:
-				continue
+		print(f'unique posters: {len(unique_posters)}')
+
+		for i, url_ in enumerate(unique_posters, 1):
+
+			print(f'poster {i}/{len(unique_posters)}...')
 
 			while True:
 				try:
 					self.driver.get(url_)
 					break
 				except:
-					pass
+					print(f'couldn\'t get URL {url_}, refreshing page...')
+					self.driver.refresh()
 
+			# try to shut down the annoying popup
 			try:
 				WebDriverWait(self.driver, 6) \
 							.until(EC.element_to_be_clickable((By.XPATH, '//a[@aria-label="Press Esc to close"]'))) \
@@ -385,32 +467,41 @@ class Fbdown:
 			except:
 				pass
 
+			about_ = intro_ = None
 
 			try:
-				WebDriverWait(self.driver, 6) \
-							.until(EC.element_to_be_clickable((By.XPATH, '//div[@data-key="tab_about"]'))) \
-								.click()
-				try:
-					categs[p]['poster_category'] = ' - '.join([w.strip().lower() for w in re.split(r'[^\w\s]', 
-											WebDriverWait(self.driver, self.wait) \
-											.until(EC.element_to_be_clickable((By.XPATH, '//u[text()="categories"]/../../following-sibling::div[@class]'))).text)])
-				except:
-					categs[p]['poster_category'] = 'business'
-
+				about_ = WebDriverWait(self.driver, 6) \
+								.until(EC.element_to_be_clickable((By.XPATH, '//div[@data-key="tab_about"]'))) 
 			except:
-				# this is not a business
-				categs[p]['poster_category'] = 'private'
+				pass
 
-				try:
-					intro_ = WebDriverWait(self.driver, 6) \
+			try:
+				intro_ = WebDriverWait(self.driver, 6) \
 								.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'div#intro_container_id')))
-					print('found intro..')
-					print(intro_.text)
-				except:
-					pass		
+			except:
+				pass
 
-		for post_id in categs:
-			self.new_posts[post_id]['poster_category'] = categs[post_id]['poster_category']
+			if about_:    # it's a business
+				try:
+					about_.click()
+					categs[url_]['poster_category'] = ' - '.join([w.strip().lower() for w in re.split(r'[^\w\s]', 
+														WebDriverWait(self.driver, self.wait) \
+													.until(EC.element_to_be_clickable((By.XPATH, 
+														'//u[text()="categories"]/../../following-sibling::div[@class]'))).text)])
+				except:
+					categs[url_]['poster_category'] = 'business'
+
+			elif intro_:    # it's a person
+
+				categs[url_]['poster_category'] = 'private'
+				for line in intro_.text.strip().split('\n'):
+					if 'lives in' in line.lower():
+						categs[url_]['lives_in'] = line.lower()
+
+		for p_url in categs:
+			for p_id in self.new_posts:
+				if self.new_posts[p_id]['poster_url'] == p_url:
+					self.new_posts[p_id].update(categs[p_url])
 
 		return self
 
@@ -442,9 +533,8 @@ class Fbdown:
 							.until(EC.visibility_of_element_located((By.XPATH, '//div[@role="heading" and @aria-level="3"]')))
 		except:
 			if self.driver.find_element_by_class_name('clearfix'):
-				raise Exception('couldn\'t find anything...')
-			else:
-				raise Exception('couldn\'t find anything but no nothing found icon either!')
+				print('couldn\'t find anything...')
+				return self
 
 		# not it's time to click on Photos or Videos in the panel menu
 		WebDriverWait(self.driver, self.wait) \
@@ -533,12 +623,14 @@ class Fbdown:
 		update posts with the new ones and save to s JSON
 		"""
 
-		json.dump(self.new_posts, open(f'{self.post_dir}/new_posts.json','w'))
+		# if not self.new_posts:
+		# 	print('nothing to save')
+		# 	return self
 
 		json.dump({**self.posts, **self.new_posts}, open(f'{self.post_dir}/posts.json','w'))
 
-		if self.posts:
-			json.dump(self.posts, open(f'{self.post_archive_dir}/posts_{arrow.get(self.today).format("YYYYMMDD")}.json','w'))
+		# if self.posts:
+		# 	json.dump(self.posts, open(f'{self.post_archive_dir}/posts_{arrow.get(self.today).format("YYYYMMDD")}.json','w'))
 
 		return self
 
@@ -547,6 +639,10 @@ class Fbdown:
 		"""
 		download photos or videos
 		"""
+
+		if not self.new_posts:
+			print('no new posts, nothing to download...')
+			return self
 
 		for _ in self.new_posts:
 
@@ -571,7 +667,7 @@ class Fbdown:
 				print('ok')
 			elif ext_ in self.extensions['picture']:
 				p = os.path.join(self.picture_dir, f'picture_{_}.{ext_}')
-				print(f'downloading video to {p}...', end='')
+				print(f'downloading picture to {p}...', end='')
 				local_filename, headers = urllib.request.urlretrieve(url_, p)
 				urllib.request.urlcleanup()
 				self.new_posts[_]['file'] = p
@@ -727,8 +823,5 @@ if __name__ == '__main__':
 					.get_post_ids() \
 					.get_post_details() \
 					.get_poster() \
-					.get_content().save() 
-
-
-
-
+					.get_content() \
+					.update_metrics().save() 
