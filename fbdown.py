@@ -4,6 +4,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 
+from selenium.webdriver.chrome.options import DesiredCapabilities
+from selenium.webdriver.common.proxy import Proxy, ProxyType
+
 import time
 import json
 import re
@@ -37,13 +40,20 @@ class Fbdown:
 
 		self.wait = wait
 
+		# list of proxies to try
+		self.proxies = []
+		# list of proxies already tried
+		self.used_proxies = []
+
+		with open('proxies/proxies.txt') as f:
+		    for line in f.readlines():   # ip: 190.12.55.210 port: 48994
+		        ip = re.search(r'\b\d+\.\d+\.\d+\.\d+\b', line).group(0)
+		        port = line.split()[-1]
+		        self.proxies.append(ip + ':' + port)
+
+		print(f'proxies: {len(self.proxies)}')
+
 		self.today = arrow.utcnow().to('Australia/Sydney').format('YYYY-MM-DD')
-
-		options = webdriver.ChromeOptions()
-		options.add_argument('disable-notifications')
-		# options.add_argument('headless')
-
-		self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
 
 		# some useful regex expressions to capture post IDs
 		self.fbid_re = re.compile(r'(?<=p\.)\d+')
@@ -64,8 +74,6 @@ class Fbdown:
 								.from_service_account_file(f'{self.creds_dir}/ArnottsAU-7991416de13b.json'))
 
 		if not os.path.exists(self.creds_dir):
-
-			self.driver.close()
 			raise Exception('can\'t find the credentials directory!')
 
 		for d in [self.post_dir, self.post_archive_dir, self.video_dir, self.picture_dir]:
@@ -82,6 +90,63 @@ class Fbdown:
 			print('collecting a new JSON with posts...')
 
 		self.new_posts = defaultdict(lambda: defaultdict(lambda: defaultdict()))
+
+	def start_browser(self, url='https://www.iplocation.net', proxy=False):
+
+		# first set up some options
+		options = webdriver.ChromeOptions()
+		options.add_argument('--disable-notifications')
+		options.add_argument('--ignore-certificate-errors')
+		options.add_argument('--ignore-ssl-errors')
+		# options.add_argument('headless')
+
+		if proxy:
+
+			while 1:
+
+				print(f'proxies left to try: {len(self.proxies)}')
+
+				if len(self.proxies) == 0:
+					break
+
+				capabilities = webdriver.DesiredCapabilities.CHROME
+	
+				prx = Proxy()   # contains information about proxy type and necessary proxy settings
+		
+				prx.proxy_type = ProxyType.MANUAL   # manual proxy settings
+	
+				# pick a random proxy
+				p = self.proxies.pop(random.randint(0, len(self.proxies) - 1))
+
+				print(f'testing proxy {p}...')
+
+				# options.add_argument(f'--proxy-server={p}')
+
+				# add this proxy to the list of used ones
+				self.used_proxies.append(p)
+	
+				prx.http_proxy = prx.socks_proxy = prx.ssl_proxy = p
+			
+				prx.add_to_capabilities(capabilities)
+	
+				self.driver = webdriver.Chrome('webdriver/chromedriver', 
+												chrome_options=options, desired_capabilities=capabilities)
+				try:
+					self.driver.get(url)
+					new_ip = WebDriverWait(self.driver, 5) \
+								.until(EC.visibility_of_element_located((By.CSS_SELECTOR, '#wrapper > section > div > div > div.col.col_8_of_12 > div:nth-child(8) > div:nth-child(2) > p > span:nth-child(1)'))).text.strip()
+
+					print(f'response: {new_ip.strip().lower()}. proxy works!')
+					self.driver.close()
+					break
+
+				except:
+					print(f'doesn\'t work')
+		else:
+
+			self.driver = webdriver.Chrome('webdriver/chromedriver', chrome_options=options)
+
+		return self
 
 	def login(self):
 		"""
@@ -159,6 +224,19 @@ class Fbdown:
 			self.driver.execute_script(f"window.scrollTo(0, document.body.scrollHeight);")
 			time.sleep(s)
 
+	def _get_url(self, url, n=2):
+
+		attempt_ = 0
+
+		while attempt_ < n:
+			try:
+				self.driver.get(url_)
+				break
+			except:
+				print(f'couldn\'t get URL {url_}, refreshing page...')
+				self.driver.refresh()
+				attempt_ += 1
+
 	def _get_post_id(self, url):
 
 		post_id = None
@@ -204,7 +282,7 @@ class Fbdown:
 				print(f'can\'t find block {blc_id}! trying next one...')
 				continue
 
-			time.sleep(random.randint(2,5))
+			time.sleep(random.randint(2,8))
 	
 			# collect urls from this block
 			try:
@@ -234,6 +312,9 @@ class Fbdown:
 			if (heights_[-3:].count(heights_[-1]) == 3):
 				print(f'done scrolling...')
 				break
+
+			if n > 3:
+				break
 	
 		# parse collected urls to extract post IDs
 		for post_url in list(refs_):
@@ -259,15 +340,18 @@ class Fbdown:
 
 		for url_ in post_url_list:
 
-			time.sleep(random.randint(2,5))
+			time.sleep(random.randint(2,8))
 
-			while True:
+			nrefr = 0
+
+			while nrefr < 3:
 				try:
 					self.driver.get(url_)
 					break
 				except:
 					print(f'couldn\'t get URL {url_}, refreshing page...')
 					self.driver.refresh()
+					nrefr += 1
 					time.sleep(4)
 
 			# get comments, shares and reactions
@@ -309,22 +393,22 @@ class Fbdown:
 
 		dict_ = copy.copy(self.new_posts)
 
-		for i, p in enumerate(self.new_posts, 1):
+		for i, post_id_ in enumerate(self.new_posts, 1):
 
 			print(f'processing post {i}...')
+
+			time.sleep(random.randint(2,8))
 
 			# dictionary to collect post info; attach it to the post ID key
 			this_post = defaultdict(lambda: defaultdict(lambda: defaultdict()))
 
-			url_ = self.new_posts[p]['post_url']
+			url_ = self.new_posts[post_id_]['post_url']
 
-			while True:
-				try:
-					self.driver.get(url_)
-					break
-				except:
-					print(f'couldn\'t get URL {url_}, refreshing page...')
-					self.driver.refresh()
+			if url_:
+				self._get_url(url_)
+			else:
+				print('no post url available! skipping..')
+				continue
 
 			# get when posted
 			try:
@@ -336,33 +420,6 @@ class Fbdown:
 				# if a post has no timestamp, it's useless
 				print('found a post without a timestamp! skipping..')
 				continue
-
-			# # get comments, shares and reactions
-			# for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-live="polite"]'):
-	
-			# 	# search for comments or shares, they may sit in text
-			# 	tx_ = _.text.lower()
-	
-			# 	if tx_:
-			# 		for m in ['comments', 'shares']:
-			# 			try:
-			# 				this_post['metrics'][self.today][m] = int(re.search(r'\d+\s+(?=' + f'{m})', tx_).group(0))
-			# 			except:
-			# 				pass
-
-			# for _ in self.driver.find_elements_by_xpath('//a[@role="button"][@aria-label]'):
-				
-			# 	try:
-			# 		aria_tx_ = _.get_attribute('aria-label').lower().strip()
-					
-			# 		for reaction_ in self.reactions:
-
-			# 			m_line = re.search(r'\d+\s+(?=' + f'{reaction_})', aria_tx_)
-
-			# 			if m_line:
-			# 				this_post['metrics'][self.today][reaction_ + 's'] = int(m_line.group(0))
-			# 	except:
-			# 		continue
 
 			# poster's url
 			try:
@@ -380,7 +437,7 @@ class Fbdown:
 				print('no content url for image. now searching for special content urls..')
 				try:
 					# need to visit the mobile version of the post
-					rul_mob_ = dict_[p]['post_url'].replace('www', 'm')
+					rul_mob_ = dict_[post_id_]['post_url'].replace('www', 'm')
 					print('loading mobile version of this page...')
 					self.driver.get(rul_mob_)
 
@@ -403,7 +460,7 @@ class Fbdown:
 					continue
 			
 			if this_post:
-				dict_[p] = this_post
+				dict_[post_id_] = this_post
 
 		self.new_posts = dict_
 
@@ -412,7 +469,7 @@ class Fbdown:
 	def update_metrics(self):
 
 		print('updating new post metrics...')
-		post_urls = {self.new_posts[post_id]['post_url'] for post_id in self.new_posts}
+		post_urls = [url for url in {self.new_posts[post_id].get('post_url', None) for post_id in self.new_posts} if url]
 		print(f'total post urls: {len(post_urls)}')
 
 		if not post_urls:
@@ -452,7 +509,7 @@ class Fbdown:
 
 			print(f'poster {i}/{len(unique_posters)}...')
 
-			time.sleep(random.randint(3,10))
+			time.sleep(random.randint(3,15))
 
 			nrefr = 0
 
@@ -652,10 +709,10 @@ class Fbdown:
 
 		for _ in self.new_posts:
 
-			try:
-				url_ = self.new_posts[_]['content_url']
-			except:
-				print(f'missing content url for post id {_}! skipping download...')
+			url_ = self.new_posts[_]['content_url']
+			
+			if not url_:
+				print('no content url found, moving on to next post...')
 				continue
 
 			try:
@@ -824,10 +881,10 @@ class Fbdown:
 
 if __name__ == '__main__':
 
-	fbd = Fbdown().login() \
-					.search('timtamslam', what='photos', year='2018') \
-					.get_post_ids() \
-					.get_post_details() \
-					.get_poster() \
-					.get_content() \
-					.update_metrics().save() 
+	fbd = Fbdown().start_browser(proxy=True)
+	# .login() \
+	# 				.search('timtamslam', what='photos', year='2018') \
+	# 				.get_post_ids() \
+	# 				.get_post_details() \
+	# 				.get_content() \
+	# 				.update_metrics().save() 
